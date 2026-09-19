@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
 
-  
+
   # 1. PDF İŞLEMLERİ & SAYFA YÖNETİMİ
 
   pdf: ^3.11.1
@@ -53,6 +53,11 @@ dependencies:
 
   provider: ^6.1.2
 
+  #6.  Yerel ağ ve QR araçları
+  qr_flutter: ^4.1.0
+  network_info_plus: ^5.0.1
+  # 7. SharedPreferences ayarları
+  shared_preferences: ^2.2.3
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+
 import '../../services/zip_creator_service.dart';
 import '../Scenes/pdf_page-splitter_screen.dart';
 import '../../converter_engine/image-to-pdf.dart';
@@ -13,7 +14,8 @@ import '../services/drive_Service.dart';
 import '../services/GoogleAuthService.dart';
 import '../services/microsoft_auth_service.dart';
 import '../services/microsoft_graph_service.dart';
-import 'pdf_merge_screen.dart'; // <-- EKLENDİ: PdfMergeScreen importu
+import 'pdf_merge_screen.dart';
+import 'file_share_screen.dart'; // <-- QR Paylaşım ekranı import edildi
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,6 +28,50 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _busy = false;
   String? _statusMessage;
   final List<File> _resultFiles = [];
+
+  // Cihazdan herhangi bir dosyayı seçip doğrudan QR ile bilgisayara aktarma metodu
+  Future<void> _handleDirectQrSend() async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: false, // Tek dosya seçimi
+      type: FileType.any,
+    );
+
+    if (result == null || result.files.isEmpty || result.files.single.path == null) return;
+
+    final fileToSend = File(result.files.single.path!);
+
+    // 50 MB sınır kontrolü
+    const int maxBytes = 50 * 1024 * 1024;
+    if (fileToSend.lengthSync() > maxBytes) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.white),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text('Seçilen dosya 50 MB sınırını aşıyor!'),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.orange.shade800,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => QrShareScreen(file: fileToSend),
+      ),
+    );
+  }
 
   Future<void> _processCategory({
     required String title,
@@ -110,10 +156,10 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } catch (e) {
       setState(() {
-        _statusMessage = null; // Alttaki çirkin kutuyu tamamen gizler
+        _statusMessage = null;
       });
       final mesaj = _hataMesajiniYorumla(e);
-      _showErrorToast(mesaj); // Şık kırmızı toast/snackbar fırlatır
+      _showErrorToast(mesaj);
     } finally {
       setState(() => _busy = false);
     }
@@ -128,7 +174,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // TEK DOSYAYI DRIVE'A YÜKLEME (MANUEL)
   Future<void> _backupSingleFileToDrive(File file) async {
     final googleAuth = context.read<GoogleAuthService>();
 
@@ -168,6 +213,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _busy = false);
     }
   }
+
   String _hataMesajiniYorumla(dynamic e) {
     final hataStr = e.toString().toLowerCase();
 
@@ -209,6 +255,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
   Future<void> _handleCreateZip() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
@@ -242,7 +289,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // TÜM DOSYALARI DRIVE'A YÜKLEME (TOPLU YEDEKLEME) <-- EKSİK OLAN BUYDU
   Future<void> _backupToGoogleDrive() async {
     if (_resultFiles.isEmpty) return;
 
@@ -309,6 +355,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Dönüştürücü Paneli', style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
+          IconButton(
+            tooltip: 'PC\'ye Dosya Gönder (QR Drop)',
+            icon: const Icon(Icons.qr_code_scanner_rounded),
+            onPressed: _busy ? null : _handleDirectQrSend,
+          ),
           IconButton(
             tooltip: 'Çıkış Yap',
             icon: const Icon(Icons.logout_rounded),
@@ -485,6 +536,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     }
                   },
                 ),
+                // <-- EKLENEN KART: PC'YE DOSYA GÖNDER (QR DROP)
+                _buildActionCard(
+                  title: 'PC\'ye Gönder (QR)',
+                  subtitle: 'Ağdan bilgisayara at',
+                  icon: Icons.qr_code_2_rounded,
+                  color: Colors.cyan.shade800,
+                  onTap: _handleDirectQrSend,
+                ),
               ],
             ),
             const SizedBox(height: 16),
@@ -621,6 +680,19 @@ class _HomeScreenState extends State<HomeScreen> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Hazır dönüştürülmüş dosyayı tek tıkla QR ile bilgisayara atma butonu
+            IconButton(
+              tooltip: 'QR ile Bilgisayara İndir',
+              icon: const Icon(Icons.qr_code_2_rounded, color: Colors.indigo),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => QrShareScreen(file: file),
+                  ),
+                );
+              },
+            ),
             IconButton(
               tooltip: "Bu dosyayı Drive'a yükle",
               icon: const Icon(Icons.cloud_upload_outlined, color: Colors.blue),

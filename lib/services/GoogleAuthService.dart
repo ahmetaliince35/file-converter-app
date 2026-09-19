@@ -14,9 +14,11 @@ class GoogleAuthService extends ChangeNotifier {
 
   GoogleSignInAccount? _currentUser;
   auth.AuthClient? _authenticatedClient;
+  bool _isChecking = true; // İlk açılış kontrolü için
 
   GoogleSignInAccount? get currentUser => _currentUser;
   bool get isSignedIn => _currentUser != null;
+  bool get isChecking => _isChecking;
   auth.AuthClient? get authenticatedClient => _authenticatedClient;
 
   GoogleAuthService() {
@@ -27,10 +29,21 @@ class GoogleAuthService extends ChangeNotifier {
       } else {
         _authenticatedClient = null;
       }
+      _isChecking = false;
       notifyListeners();
     });
+  }
 
-    _googleSignIn.signInSilently();
+  /// Uygulama ilk açıldığında arka planda sessizce çağrılır
+  Future<void> initSilently() async {
+    try {
+      await _googleSignIn.signInSilently();
+    } catch (e) {
+      debugPrint('Google sessiz oturum hatası: $e');
+    } finally {
+      _isChecking = false;
+      notifyListeners();
+    }
   }
 
   Future<bool> signIn() async {

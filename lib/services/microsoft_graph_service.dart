@@ -41,7 +41,7 @@ class MicrosoftGraphService {
       }
 
       // 3. Cihaza yerel dosya olarak kaydet
-      final dir = await getApplicationDocumentsDirectory();
+      final dir = await getTemporaryDirectory();
       final outFile = File('${dir.path}/$baseName.pdf');
       await outFile.writeAsBytes(pdfRes.bodyBytes);
 

@@ -25,7 +25,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: appNavigatorKey, // Microsoft oturum açma penceresi için zorunludur
+      navigatorKey: appNavigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Dosya Converter',
       theme: ThemeData(
@@ -37,13 +37,44 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  @override
+  void initState() {
+    super.initState();
+    // İlk render bittikten hemen sonra arka planda oturumları kontrol et
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<GoogleAuthService>().initSilently();
+      context.read<MicrosoftAuthService>().initSilently();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final googleAuth = context.watch<GoogleAuthService>();
     final msAuth = context.watch<MicrosoftAuthService>();
+
+    // İki servis de henüz cihazdaki token'ları okumadıysa hafif bir splash göster
+    if (googleAuth.isChecking && msAuth.isChecking) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.description_outlined, size: 64, color: Colors.indigo),
+              SizedBox(height: 16),
+              CircularProgressIndicator(),
+            ],
+          ),
+        ),
+      );
+    }
 
     final isSignedIn = googleAuth.isSignedIn || msAuth.isSignedIn;
     return isSignedIn ? const HomeScreen() : const LoginScreen();

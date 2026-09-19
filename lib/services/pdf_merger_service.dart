@@ -37,7 +37,7 @@ class PdfMergerService {
       inputPdf.dispose();
     }
 
-    final outputDir = await getApplicationDocumentsDirectory();
+    final outputDir = await getTemporaryDirectory();
     final fileName = 'Birlestirilmis_${DateTime.now().millisecondsSinceEpoch}.pdf';
     final outputFile = File('${outputDir.path}/$fileName');
 

@@ -35,7 +35,7 @@ class PdfSplitterService {
 
     inputDoc.dispose();
 
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getTemporaryDirectory();
     final baseName = p.basenameWithoutExtension(sourcePdf.path);
     final outFile = File('${dir.path}/${baseName}_Secilenler_${DateTime.now().millisecondsSinceEpoch}.pdf');
 

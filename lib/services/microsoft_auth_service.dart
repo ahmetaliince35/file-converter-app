@@ -2,18 +2,18 @@ import 'package:aad_oauth/aad_oauth.dart';
 import 'package:aad_oauth/model/config.dart';
 import 'package:flutter/material.dart';
 
-// MaterialApp ile paylaşılacak GlobalKey
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 class MicrosoftAuthService extends ChangeNotifier {
-  // Azure Portal'dan aldığın Application (client) ID'yi buraya yaz:
   static const String _clientId = 'aba92ff3-7185-4903-b805-a9d1df36b72f';
 
   late final AadOAuth _oauth;
   String? _accessToken;
   String? _userEmail;
+  bool _isChecking = true;
 
   bool get isSignedIn => _accessToken != null;
+  bool get isChecking => _isChecking;
   String? get userEmail => _userEmail;
   String? get accessToken => _accessToken;
 
@@ -26,6 +26,24 @@ class MicrosoftAuthService extends ChangeNotifier {
       navigatorKey: appNavigatorKey,
     );
     _oauth = AadOAuth(config);
+  }
+
+  /// Açılışta kayıtlı token varsa sessizce alır
+  Future<void> initSilently() async {
+    try {
+      final hasToken = await _oauth.hasCachedAccountInformation;
+      if (hasToken) {
+        _accessToken = await _oauth.getAccessToken();
+        if (_accessToken != null) {
+          _userEmail = 'Microsoft Hesabı';
+        }
+      }
+    } catch (e) {
+      debugPrint('Microsoft sessiz kontrol hatası: $e');
+    } finally {
+      _isChecking = false;
+      notifyListeners();
+    }
   }
 
   Future<bool> signIn() async {

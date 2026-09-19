@@ -9,7 +9,7 @@ class ZipExtractor {
     final bytes = await inputFile.readAsBytes();
     final archive = ZipDecoder().decodeBytes(bytes);
 
-    final docsDir = await getApplicationDocumentsDirectory();
+    final docsDir = await getTemporaryDirectory();
     final baseName = inputFile.uri.pathSegments.last.split('.').first;
     final outDir = Directory('${docsDir.path}/extracted_$baseName');
     if (!await outDir.exists()) {

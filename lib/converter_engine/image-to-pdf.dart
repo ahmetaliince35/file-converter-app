@@ -410,7 +410,7 @@ class ImageToPdfConverter {
       );
     }
 
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getTemporaryDirectory();
     final baseName = inputFiles.first.uri.pathSegments.last.split('.').first;
     final outFile = File('${dir.path}/${baseName}_${DateTime.now().millisecondsSinceEpoch}.pdf');
     await outFile.writeAsBytes(await doc.save());

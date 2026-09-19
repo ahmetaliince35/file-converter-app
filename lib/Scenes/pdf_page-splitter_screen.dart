@@ -143,6 +143,11 @@ class _PdfSplitScreenState extends State<PdfSplitScreen> {
       if (mounted) setState(() => _isLoading = false);
     }
   }
+  @override
+  void dispose() {
+    _thumbnailBytesCache.clear();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

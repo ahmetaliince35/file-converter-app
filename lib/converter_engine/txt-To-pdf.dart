@@ -54,7 +54,7 @@ class TxtToPdfConverter {
       ),
     );
 
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getTemporaryDirectory();
     final baseName = p.basenameWithoutExtension(inputFile.path);
     final outFile = File('${dir.path}/${baseName}_${DateTime.now().millisecondsSinceEpoch}.pdf');
     await outFile.writeAsBytes(await doc.save());

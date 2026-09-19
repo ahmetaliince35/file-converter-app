@@ -53,7 +53,7 @@ class DriveSyncService {
         downloadOptions: drive.DownloadOptions.fullMedia,
       ) as drive.Media;
 
-      final dir = await getApplicationDocumentsDirectory();
+      final dir = await getTemporaryDirectory();
       final outFile = File('${dir.path}/$baseName.pdf');
       final sink = outFile.openWrite();
       await responseMedia.stream.pipe(sink);
