@@ -1,41 +1,51 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '/GoogleAuthService.dart';
-import '/home-screen.dart';
-import '/login-screen.dart';
+import 'services/GoogleAuthService.dart';
+import 'services/microsoft_auth_service.dart';
+import 'Scenes/login-screen.dart';
+import 'Scenes/home-screen.dart';
 
 void main() {
-  runApp(const DosyaConverterApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => GoogleAuthService()),
+        ChangeNotifierProvider(create: (_) => MicrosoftAuthService()),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
-class DosyaConverterApp extends StatelessWidget {
-  const DosyaConverterApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => GoogleAuthService(),
-      child: MaterialApp(
-        title: 'Dosya Converter',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorSchemeSeed: Colors.indigo,
-          useMaterial3: true,
-        ),
-        home: const _RootRouter(),
+    return MaterialApp(
+      navigatorKey: appNavigatorKey, // Microsoft oturum açma penceresi için zorunludur
+      debugShowCheckedModeBanner: false,
+      title: 'Dosya Converter',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.indigo,
       ),
+      home: const AuthGate(),
     );
   }
 }
 
-/// Giriş yapılmasa da uygulama kullanılabilir (offline dönüştürme login
-/// gerektirmez). Login sadece Drive senkronu için gereklidir.
-class _RootRouter extends StatelessWidget {
-  const _RootRouter();
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const HomeScreen();
+    final googleAuth = context.watch<GoogleAuthService>();
+    final msAuth = context.watch<MicrosoftAuthService>();
+
+    final isSignedIn = googleAuth.isSignedIn || msAuth.isSignedIn;
+    return isSignedIn ? const HomeScreen() : const LoginScreen();
   }
 }

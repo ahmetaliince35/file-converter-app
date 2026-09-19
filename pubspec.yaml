@@ -1,5 +1,5 @@
 name: dosya_converter
-description: Offline dosya dönüştürücü (PDF, DOCX, XLSX, PPTX, JPG/PNG, ZIP) + Google Drive senkronizasyonu
+description: Çevrimdışı dosya dönüştürücü (PDF, DOCX, XLSX, PPTX, JPG/PNG, ZIP) + Bulut Entegrasyonları
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -11,30 +11,46 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
 
-  # PDF oluşturma
+  
+  # 1. PDF İŞLEMLERİ & SAYFA YÖNETİMİ
+
   pdf: ^3.11.1
   printing: ^5.13.4
+  syncfusion_flutter_pdf: ^24.2.7 # PDF birleştirme ve sayfa ayıklama motoru
 
-  # Dosya seçme / depolama / paylaşma
+  # 2. DOSYA SEÇİMİ, ERİŞİMİ & CİHAZ YÖNETİMİ
+
   file_picker: ^10.3.3
+  image_picker: ^1.0.7
   path_provider: ^2.1.5
+  open_filex: ^4.7.0
   share_plus: ^10.1.2
 
-  # ZIP ayıklama
-  archive: ^3.6.1
 
-  # XLSX okuma
-  excel: ^4.0.6
+  # 3. BELGE & ARŞİV FORMATI İŞLEYİCİLERİ
 
-  # DOCX / PPTX içindeki XML'i parse etmek için (docx ve pptx de birer zip'tir)
-  xml: ^6.5.0
+  archive: ^3.6.1 # ZIP oluşturma ve ayıklama
+  excel: ^4.0.6   # XLSX okuma ve işleme
+  xml: ^6.5.0     # DOCX / PPTX XML ayrıştırma
 
-  # Google Sign-In + Drive senkron
+
+  # 4. KİMLİK DOĞRULAMA & BULUT ENTEGRASYONLARI
+
+  # Microsoft Entra ID (Azure AD) & Graph API
+  aad_oauth: ^1.0.1
+
+  # Google Sign-In & Google Drive API
   google_sign_in: ^6.2.2
   googleapis: ^13.2.0
-  http: ^1.2.2
+  googleapis_auth: ^1.6.0
+  extension_google_sign_in_as_googleapis_auth: ^2.0.12
 
-  # State management (basit)
+  # Ağ / HTTP İstemcisi
+  http: ^1.6.0
+
+
+  # 5. DURUM YÖNETİMİ (STATE MANAGEMENT)
+
   provider: ^6.1.2
 
 dev_dependencies:
