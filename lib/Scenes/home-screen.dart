@@ -7,6 +7,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../core/theme/theme_view_model.dart';
 import '../../services/zip_creator_service.dart';
 import '../Scenes/pdf_page-splitter_screen.dart';
 import '../../converter_engine/image-to-pdf.dart';
@@ -437,6 +438,19 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.5),
                 ),
                 actions: [
+                  Consumer<ThemeViewModel>(
+                    builder: (context, themeViewModel, _) => IconButton(
+                      tooltip: themeViewModel.isDark
+                          ? 'Açık temaya geç'
+                          : 'Koyu temaya geç',
+                      icon: Icon(
+                        themeViewModel.isDark
+                            ? Icons.light_mode_rounded
+                            : Icons.dark_mode_rounded,
+                      ),
+                      onPressed: themeViewModel.toggle,
+                    ),
+                  ),
                   IconButton.filledTonal(
                     tooltip: 'PC\'ye QR ile Aktar',
                     icon: const Icon(Icons.qr_code_scanner_rounded),

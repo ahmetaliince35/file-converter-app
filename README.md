@@ -1,17 +1,10 @@
-# file_converter
+# Dosya Dönüştürücü
 
-A new Flutter project.
+PDF, görsel, metin, arşiv ve Office dosyaları için Flutter tabanlı dönüşüm
+uygulaması.
 
-## Getting Started
+Uygulama Material 3 açık/koyu temayı destekler. Tema düğmesi, oturum açıldıktan
+sonra ana panelin üst çubuğundadır; seçiminiz yeniden başlatmalarda korunur.
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Mimari, çalıştırma ve ekran taşımaları için [ARCHITECTURE.md](ARCHITECTURE.md)
+belgesine bakın.

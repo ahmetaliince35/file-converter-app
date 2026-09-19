@@ -46,3 +46,26 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+android/local.properties
+android/.gradle/
+android/**/.cxx/
+*.jks
+*.keystore
+key.properties
+android/app/google-services.json
+
+
+.env
+.env.*
+client_secret*.json
+oauth_credentials.json
+
+.flutter-plugins
+.packages
+*.tmp
+*.bak
+
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Generated.xcconfig
