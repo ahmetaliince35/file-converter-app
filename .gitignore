@@ -69,3 +69,5 @@ oauth_credentials.json
 ios/Pods/
 ios/.symlinks/
 ios/Flutter/Generated.xcconfig
+
+*.md
