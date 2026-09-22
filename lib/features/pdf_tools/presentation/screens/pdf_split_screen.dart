@@ -4,7 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:printing/printing.dart';
-import '../services/pdf-page_splitter_service.dart';
+import '../../data/pdf_splitter_service.dart';
 
 class PdfSplitScreen extends StatefulWidget {
   const PdfSplitScreen({super.key});

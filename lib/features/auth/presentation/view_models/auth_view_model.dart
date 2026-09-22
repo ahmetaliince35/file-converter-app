@@ -1,12 +1,9 @@
 import 'package:flutter/foundation.dart';
 
-import '../../../../services/GoogleAuthService.dart';
-import '../../../../services/microsoft_auth_service.dart';
+import '../../data/google_auth_service.dart';
+import '../../data/microsoft_auth_service.dart';
 
 /// Kimlik sağlayıcılarını tek bir ekran durumunda birleştirir.
-///
-/// Ekranlar sağlayıcıların uygulama ayrıntılarını bilmek yerine bu ViewModel
-/// üzerinden oturum durumunu izlemelidir.
 class AuthViewModel extends ChangeNotifier {
   AuthViewModel(this._googleAuth, this._microsoftAuth) {
     _googleAuth.addListener(_notify);

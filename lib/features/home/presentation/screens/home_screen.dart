@@ -5,22 +5,19 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 
-import '../core/theme/theme_view_model.dart';
-import '../../services/zip_creator_service.dart';
-import '../Scenes/pdf_page-splitter_screen.dart';
-import '../../converter_engine/image-to-pdf.dart';
-import '../../converter_engine/txt-To-pdf.dart';
-import '../../converter_engine/zip-extractor.dart';
-import '../services/drive_Service.dart';
-import '../services/GoogleAuthService.dart';
-import '../services/microsoft_auth_service.dart';
-import '../services/microsoft_graph_service.dart';
-import 'pdf_merge_screen.dart';
-import 'pdf_compress_screen.dart';
-import 'doc_scanner_screen.dart';
-import 'file_share_screen.dart';
+import '../../../../core/theme/theme_view_model.dart';
+import '../../../../core/widgets/feedback_snack_bar.dart';
+import '../../../auth/data/google_auth_service.dart';
+import '../../../auth/data/microsoft_auth_service.dart';
+import '../../../convert/domain/conversion_kind.dart';
+import '../../../convert/presentation/screens/image_to_pdf_screen.dart';
+import '../../../pdf_tools/presentation/screens/pdf_compress_screen.dart';
+import '../../../pdf_tools/presentation/screens/pdf_merge_screen.dart';
+import '../../../pdf_tools/presentation/screens/pdf_split_screen.dart';
+import '../../../scanner/presentation/screens/doc_scanner_screen.dart';
+import '../../../share/presentation/screens/qr_share_screen.dart';
+import '../view_models/home_view_model.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,11 +27,20 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool _busy = false;
-  String? _statusMessage;
-  final List<File> _resultFiles = [];
+  HomeViewModel get _home => context.read<HomeViewModel>();
 
-  // ================= AKSİYON METOTLARI =================
+  void _notify(HomeOpResult result) {
+    if (!mounted) return;
+    showFeedbackSnackBar(
+      context,
+      message: result.message,
+      icon: result.isSuccess
+          ? Icons.check_circle_rounded
+          : Icons.error_outline_rounded,
+      backgroundColor:
+          result.isSuccess ? Colors.teal.shade700 : Colors.red.shade800,
+    );
+  }
 
   Future<void> _handleDirectQrSend() async {
     HapticFeedback.lightImpact();
@@ -43,14 +49,17 @@ class _HomeScreenState extends State<HomeScreen> {
       type: FileType.any,
     );
 
-    if (result == null || result.files.isEmpty || result.files.single.path == null) return;
+    if (result == null || result.files.isEmpty || result.files.single.path == null) {
+      return;
+    }
 
     final fileToSend = File(result.files.single.path!);
-    const int maxBytes = 50 * 1024 * 1024; // 50 MB
+    const int maxBytes = 50 * 1024 * 1024;
 
     if (fileToSend.lengthSync() > maxBytes) {
       if (!mounted) return;
-      _showFeedbackSnackBar(
+      showFeedbackSnackBar(
+        context,
         message: 'Seçilen dosya 50 MB sınırını aşıyor!',
         icon: Icons.warning_amber_rounded,
         backgroundColor: Colors.amber.shade900,
@@ -66,9 +75,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _processCategory({
-    required String title,
     required List<String> extensions,
-    required String type,
+    required ConversionKind kind,
   }) async {
     HapticFeedback.selectionClick();
     final result = await FilePicker.platform.pickFiles(
@@ -81,7 +89,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (result.files.length > 10) {
       if (!mounted) return;
-      _showFeedbackSnackBar(
+      showFeedbackSnackBar(
+        context,
         message: 'En fazla 10 dosya seçebilirsiniz! Lütfen tekrar seçin.',
         icon: Icons.info_outline_rounded,
         backgroundColor: Colors.orange.shade800,
@@ -90,84 +99,22 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final validFiles = result.files
-        .where((f) => f.path != null)
-        .map((f) => File(f.path!))
+        .where((file) => file.path != null)
+        .map((file) => File(file.path!))
         .toList();
 
     if (validFiles.isEmpty) return;
 
-    setState(() {
-      _busy = true;
-      _statusMessage = '${validFiles.length} dosya hazırlanıyor...';
-    });
-
-    try {
-      final googleAuth = context.read<GoogleAuthService>();
-      final msAuth = context.read<MicrosoftAuthService>();
-      final total = validFiles.length;
-
-      for (int i = 0; i < validFiles.length; i++) {
-        final file = validFiles[i];
-        final name = file.uri.pathSegments.last;
-
-        setState(() {
-          _statusMessage = 'İşleniyor (${i + 1}/$total)\n$name';
-        });
-
-        if (type == 'office') {
-          if (msAuth.isSignedIn) {
-            final token = await msAuth.getAccessToken();
-            if (token != null) {
-              final msService = MicrosoftGraphService(token);
-              _resultFiles.insert(0, await msService.convertOfficeToPdf(file));
-              continue;
-            }
-          }
-
-          if (!googleAuth.isSignedIn) {
-            final ok = await googleAuth.signIn();
-            if (!ok) {
-              throw Exception('Office dönüşümü için bir Google veya Microsoft oturumu gereklidir.');
-            }
-          }
-          final driveService = DriveSyncService(googleAuth);
-          _resultFiles.insert(0, await driveService.convertOfficeToPdfViaDrive(file));
-        } else if (type == 'image') {
-          _resultFiles.insert(0, await ImageToPdfConverter.convert(file));
-        } else if (type == 'txt') {
-          _resultFiles.insert(0, await TxtToPdfConverter.convert(file));
-        } else if (type == 'zip') {
-          final extracted = await ZipExtractor.extract(file);
-          _resultFiles.insertAll(0, extracted);
-        }
-      }
-
-      _showFeedbackSnackBar(
-        message: '$total dosya başarıyla dönüştürüldü.',
-        icon: Icons.check_circle_rounded,
-        backgroundColor: Colors.teal.shade700,
-      );
-    } catch (e) {
-      _showFeedbackSnackBar(
-        message: _hataMesajiniYorumla(e),
-        icon: Icons.error_outline_rounded,
-        backgroundColor: Colors.red.shade800,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _statusMessage = null;
-        });
-      }
-    }
+    final op = await _home.processFiles(files: validFiles, kind: kind);
+    _notify(op);
   }
 
   Future<void> _previewFile(File file) async {
     HapticFeedback.lightImpact();
     final result = await OpenFilex.open(file.path);
     if (result.type != ResultType.done && mounted) {
-      _showFeedbackSnackBar(
+      showFeedbackSnackBar(
+        context,
         message: 'Dosya açılamadı: ${result.message}',
         icon: Icons.broken_image_rounded,
         backgroundColor: Colors.red.shade700,
@@ -176,51 +123,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _backupSingleFileToDrive(File file) async {
-    final googleAuth = context.read<GoogleAuthService>();
-
-    if (!googleAuth.isSignedIn) {
-      final success = await googleAuth.signIn();
-      if (!success) {
-        if (!mounted) return;
-        _showFeedbackSnackBar(
-          message: 'Yedekleme için Google girişi yapılmadı.',
-          icon: Icons.lock_outline_rounded,
-          backgroundColor: Colors.amber.shade900,
-        );
-        return;
-      }
-    }
-
-    setState(() {
-      _busy = true;
-      _statusMessage = '${file.uri.pathSegments.last}\nDrive\'a aktarılıyor...';
-    });
-
-    try {
-      final driveService = DriveSyncService(googleAuth);
-      await driveService.uploadPdfToDrive(file);
-
-      if (!mounted) return;
-      _showFeedbackSnackBar(
-        message: '${file.uri.pathSegments.last} Drive\'a yüklendi!',
-        icon: Icons.cloud_done_rounded,
-        backgroundColor: Colors.green.shade700,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      _showFeedbackSnackBar(
-        message: 'Yükleme hatası: $e',
-        icon: Icons.error_rounded,
-        backgroundColor: Colors.red.shade800,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _statusMessage = null;
-        });
-      }
-    }
+    final op = await _home.backupSingleToDrive(file);
+    if (!mounted) return;
+    showFeedbackSnackBar(
+      context,
+      message: op.message,
+      icon: op.isSuccess
+          ? Icons.cloud_done_rounded
+          : Icons.lock_outline_rounded,
+      backgroundColor:
+          op.isSuccess ? Colors.green.shade700 : Colors.amber.shade900,
+    );
   }
 
   Future<void> _handlePdfCompression() async {
@@ -229,7 +142,9 @@ class _HomeScreenState extends State<HomeScreen> {
       allowedExtensions: ['pdf'],
     );
 
-    if (result == null || result.files.isEmpty || result.files.single.path == null) return;
+    if (result == null || result.files.isEmpty || result.files.single.path == null) {
+      return;
+    }
     if (!mounted) return;
 
     final selectedPdf = File(result.files.single.path!);
@@ -239,8 +154,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (compressed != null && mounted) {
-      setState(() => _resultFiles.insert(0, compressed));
-      _showFeedbackSnackBar(
+      _home.addResult(compressed);
+      showFeedbackSnackBar(
+        context,
         message: 'Sıkıştırılmış PDF hazırlandı!',
         icon: Icons.compress_rounded,
         backgroundColor: Colors.teal.shade700,
@@ -261,8 +177,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (outputPdf != null && mounted) {
-      setState(() => _resultFiles.insert(0, outputPdf));
-      _showFeedbackSnackBar(
+      _home.addResult(outputPdf);
+      showFeedbackSnackBar(
+        context,
         message: 'Taranmış A4 PDF başarıyla oluşturuldu!',
         icon: Icons.document_scanner_rounded,
         backgroundColor: Colors.deepPurple.shade600,
@@ -279,140 +196,26 @@ class _HomeScreenState extends State<HomeScreen> {
     if (result == null || result.files.isEmpty) return;
 
     final files = result.files
-        .where((f) => f.path != null)
-        .map((f) => File(f.path!))
+        .where((file) => file.path != null)
+        .map((file) => File(file.path!))
         .toList();
 
     if (files.isEmpty) return;
 
-    setState(() {
-      _busy = true;
-      _statusMessage = 'Dosyalar ZIP arşivine ekleniyor...';
-    });
-
-    try {
-      final zipFile = await ZipCreatorService.createZipFromFiles(files);
-      setState(() {
-        _resultFiles.insert(0, zipFile);
-      });
-      _showFeedbackSnackBar(
-        message: '${files.length} dosya ZIP arşivlendi!',
-        icon: Icons.archive_rounded,
-        backgroundColor: Colors.brown.shade700,
-      );
-    } catch (e) {
-      _showFeedbackSnackBar(
-        message: 'ZIP hatası: $e',
-        icon: Icons.error_rounded,
-        backgroundColor: Colors.red.shade800,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _statusMessage = null;
-        });
-      }
-    }
+    _notify(await _home.createZip(files));
   }
 
   Future<void> _backupToGoogleDrive() async {
-    if (_resultFiles.isEmpty) return;
-
-    final googleAuth = context.read<GoogleAuthService>();
-
-    if (!googleAuth.isSignedIn) {
-      final success = await googleAuth.signIn();
-      if (!success) {
-        if (!mounted) return;
-        _showFeedbackSnackBar(
-          message: 'Yedekleme için Google girişi onaylanmadı.',
-          icon: Icons.lock_outline_rounded,
-          backgroundColor: Colors.amber.shade900,
-        );
-        return;
-      }
-    }
-
-    setState(() {
-      _busy = true;
-      _statusMessage = 'Google Drive\'a toplu aktarım başlatılıyor...';
-    });
-
-    try {
-      final driveService = DriveSyncService(googleAuth);
-      int count = 0;
-
-      for (final file in _resultFiles) {
-        await driveService.uploadPdfToDrive(file);
-        count++;
-        setState(() {
-          _statusMessage = 'Drive\'a yükleniyor ($count/${_resultFiles.length})...';
-        });
-      }
-
-      if (!mounted) return;
-      _showFeedbackSnackBar(
-        message: '$count dosya Drive\'a yedeklendi!',
-        icon: Icons.cloud_done_rounded,
-        backgroundColor: Colors.teal.shade700,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      _showFeedbackSnackBar(
-        message: 'Yedekleme hatası: $e',
-        icon: Icons.error_rounded,
-        backgroundColor: Colors.red.shade800,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _statusMessage = null;
-        });
-      }
-    }
-  }
-
-  String _hataMesajiniYorumla(dynamic e) {
-    final s = e.toString().toLowerCase();
-    if (s.contains('socketexception') || s.contains('network') || s.contains('failed host lookup')) {
-      return 'İnternet bağlantınızı kontrol edin.';
-    } else if (s.contains('unauthorized') || s.contains('401')) {
-      return 'Oturum zaman aşımına uğradı, tekrar giriş yapın.';
-    } else if (s.contains('timeout')) {
-      return 'İşlem zaman aşımına uğradı, lütfen tekrar deneyin.';
-    }
-    return 'İşlem gerçekleştirilemedi: ${e.toString().replaceAll('Exception:', '').trim()}';
-  }
-
-  void _showFeedbackSnackBar({
-    required String message,
-    required IconData icon,
-    required Color backgroundColor,
-  }) {
+    final op = await _home.backupAllToDrive();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(icon, color: Colors.white, size: 22),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: backgroundColor,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        duration: const Duration(seconds: 3),
-      ),
+    showFeedbackSnackBar(
+      context,
+      message: op.message,
+      icon: op.isSuccess
+          ? Icons.cloud_done_rounded
+          : Icons.lock_outline_rounded,
+      backgroundColor:
+          op.isSuccess ? Colors.teal.shade700 : Colors.amber.shade900,
     );
   }
 
@@ -422,8 +225,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final home = context.watch<HomeViewModel>();
     final googleAuth = context.watch<GoogleAuthService>();
     final msAuth = context.watch<MicrosoftAuthService>();
+    final busy = home.busy;
+    final resultFiles = home.resultFiles;
 
     return Scaffold(
       body: Stack(
@@ -454,16 +260,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   IconButton.filledTonal(
                     tooltip: 'PC\'ye QR ile Aktar',
                     icon: const Icon(Icons.qr_code_scanner_rounded),
-                    onPressed: _busy ? null : _handleDirectQrSend,
+                    onPressed: busy ? null : _handleDirectQrSend,
                   ),
                   const SizedBox(width: 4),
                   IconButton(
                     tooltip: 'Çıkış Yap',
                     icon: const Icon(Icons.logout_rounded),
-                    onPressed: () async {
-                      if (msAuth.isSignedIn) await msAuth.signOut();
-                      if (googleAuth.isSignedIn) await googleAuth.signOut();
-                    },
+                    onPressed: home.signOut,
                   ),
                   const SizedBox(width: 8),
                 ],
@@ -537,9 +340,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       icon: Icons.description_rounded,
                       color: const Color(0xFF185ABD),
                       onTap: () => _processCategory(
-                        title: 'Word',
                         extensions: ['docx', 'doc'],
-                        type: 'office',
+                        kind: ConversionKind.office,
                       ),
                     ),
                     _buildCompactActionCard(
@@ -548,9 +350,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       icon: Icons.table_chart_rounded,
                       color: const Color(0xFF107C41),
                       onTap: () => _processCategory(
-                        title: 'Excel',
                         extensions: ['xlsx', 'xls'],
-                        type: 'office',
+                        kind: ConversionKind.office,
                       ),
                     ),
                     _buildCompactActionCard(
@@ -559,9 +360,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       icon: Icons.slideshow_rounded,
                       color: const Color(0xFFC43E1C),
                       onTap: () => _processCategory(
-                        title: 'PowerPoint',
                         extensions: ['pptx', 'ppt'],
-                        type: 'office',
+                        kind: ConversionKind.office,
                       ),
                     ),
                   ]),
@@ -596,14 +396,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           context,
                           MaterialPageRoute(builder: (context) => const ImageToPdfScreen()),
                         );
-                        if (singlePdf != null && mounted) {
-                          setState(() => _resultFiles.insert(0, singlePdf));
-                          _showFeedbackSnackBar(
-                            message: 'Resimler PDF yapıldı!',
-                            icon: Icons.check_circle_rounded,
-                            backgroundColor: Colors.purple.shade700,
-                          );
-                        }
+                        if (singlePdf == null || !mounted) return;
+                        _home.addResult(singlePdf);
+                        showFeedbackSnackBar(
+                          context,
+                          message: 'Resimler PDF yapıldı!',
+                          icon: Icons.check_circle_rounded,
+                          backgroundColor: Colors.purple.shade700,
+                        );
                       },
                     ),
                     _buildFeatureCard(
@@ -617,7 +417,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           MaterialPageRoute(builder: (context) => const PdfMergeScreen()),
                         );
                         if (merged != null && mounted) {
-                          setState(() => _resultFiles.insert(0, merged));
+                          _home.addResult(merged);
                         }
                       },
                     ),
@@ -632,7 +432,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           MaterialPageRoute(builder: (context) => const PdfSplitScreen()),
                         );
                         if (extracted != null && mounted) {
-                          setState(() => _resultFiles.insert(0, extracted));
+                          _home.addResult(extracted);
                         }
                       },
                     ),
@@ -656,9 +456,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       icon: Icons.folder_zip_rounded,
                       accentColor: Colors.amber.shade800,
                       onTap: () => _processCategory(
-                        title: 'ZIP',
                         extensions: ['zip'],
-                        type: 'zip',
+                        kind: ConversionKind.zip,
                       ),
                     ),
                   ]),
@@ -666,14 +465,14 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
 
               // 6. Çıktı Dosyaları (Listelenen Alan)
-              if (_resultFiles.isNotEmpty) ...[
+              if (resultFiles.isNotEmpty) ...[
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 28, 16, 8),
                     child: Row(
                       children: [
                         Text(
-                          'Hazır Dosyalar (${_resultFiles.length})',
+                          'Hazır Dosyalar (${resultFiles.length})',
                           style: theme.textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.w800,
                             letterSpacing: -0.3,
@@ -687,19 +486,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           icon: const Icon(Icons.cloud_upload_outlined, size: 18),
                           label: const Text('Tümünü Yedekle'),
-                          onPressed: _busy ? null : _backupToGoogleDrive,
+                          onPressed: busy ? null : _backupToGoogleDrive,
                         ),
                         const SizedBox(width: 8),
                         IconButton.filledTonal(
                           visualDensity: VisualDensity.compact,
                           tooltip: 'Tümünü Paylaş',
                           icon: const Icon(Icons.share_rounded, size: 18),
-                          onPressed: _busy
-                              ? null
-                              : () {
-                            final paths = _resultFiles.map((f) => XFile(f.path)).toList();
-                            Share.shareXFiles(paths);
-                          },
+                          onPressed: busy ? null : home.shareAll,
                         ),
                       ],
                     ),
@@ -709,8 +503,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 40),
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate(
-                          (context, index) => _buildResultTile(_resultFiles[index], colorScheme, theme),
-                      childCount: _resultFiles.length,
+                          (context, index) => _buildResultTile(resultFiles[index], colorScheme, theme),
+                      childCount: resultFiles.length,
                     ),
                   ),
                 ),
@@ -721,7 +515,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
 
           // 7. İşlem Sırasında Gösterilen Şık Progress Overlay
-          if (_busy)
+          if (busy)
             Positioned.fill(
               child: Container(
                 color: Colors.black45,
@@ -737,7 +531,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           const CircularProgressIndicator(strokeWidth: 3),
                           const SizedBox(height: 20),
                           Text(
-                            _statusMessage ?? 'İşlem yürütülüyor...',
+                            home.statusMessage ?? 'İşlem yürütülüyor...',
                             textAlign: TextAlign.center,
                             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                           ),
@@ -865,7 +659,7 @@ class _HomeScreenState extends State<HomeScreen> {
       borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: _busy ? null : onTap,
+        onTap: context.watch<HomeViewModel>().busy ? null : onTap,
         splashColor: accentColor.withValues(alpha: 0.1),
         highlightColor: accentColor.withValues(alpha: 0.05),
         child: Container(
@@ -929,7 +723,7 @@ class _HomeScreenState extends State<HomeScreen> {
       borderRadius: BorderRadius.circular(16),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: _busy ? null : onTap,
+        onTap: context.watch<HomeViewModel>().busy ? null : onTap,
         splashColor: color.withValues(alpha: 0.1),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
@@ -1022,7 +816,9 @@ class _HomeScreenState extends State<HomeScreen> {
               tooltip: 'Drive\'a Yükle',
               icon: const Icon(Icons.cloud_upload_outlined, size: 20),
               color: Colors.blue.shade700,
-              onPressed: _busy ? null : () => _backupSingleFileToDrive(file),
+              onPressed: context.watch<HomeViewModel>().busy
+                  ? null
+                  : () => _backupSingleFileToDrive(file),
             ),
           ],
         ),

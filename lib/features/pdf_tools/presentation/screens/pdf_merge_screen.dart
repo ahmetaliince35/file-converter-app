@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import '../services/pdf_merger_service.dart';
+import '../../data/pdf_merger_service.dart';
 
 class PdfMergeScreen extends StatefulWidget {
   const PdfMergeScreen({super.key});

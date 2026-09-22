@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/file_share_service.dart';
+import '../../data/file_share_service.dart';
 
 class QrShareScreen extends StatefulWidget {
   final File file;

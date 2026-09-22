@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
-import '../services/doc_scanner_service.dart';
+import '../../data/doc_scanner_service.dart';
 
 class DocScannerScreen extends StatefulWidget {
   final List<File> initialImages;

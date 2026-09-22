@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/GoogleAuthService.dart';
-import '../services/microsoft_auth_service.dart';
+import '../../data/google_auth_service.dart';
+import '../../data/microsoft_auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});

@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import '../services/pdf_compressor_service.dart';
+import '../../data/pdf_compressor_service.dart';
 
 class PdfCompressScreen extends StatefulWidget {
   final File file;

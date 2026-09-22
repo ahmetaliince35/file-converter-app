@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:path_provider/path_provider.dart';
-import 'GoogleAuthService.dart';
+import '../../auth/data/google_auth_service.dart';
 
 class DriveSyncService {
   final GoogleAuthService _authService;

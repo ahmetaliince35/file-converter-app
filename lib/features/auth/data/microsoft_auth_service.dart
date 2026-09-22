@@ -2,7 +2,7 @@ import 'package:aad_oauth/aad_oauth.dart';
 import 'package:aad_oauth/model/config.dart';
 import 'package:flutter/material.dart';
 
-final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+import '../../../core/navigation/app_navigator.dart';
 
 class MicrosoftAuthService extends ChangeNotifier {
   static const String _clientId = 'aba92ff3-7185-4903-b805-a9d1df36b72f';
