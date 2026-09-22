@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:googleapis/drive/v3.dart' as drive;
-import 'package:path_provider/path_provider.dart';
+import '../../../../core/files/temp_file_manager.dart';
 import '../../auth/data/google_auth_service.dart';
 
 class DriveSyncService {
@@ -8,7 +8,6 @@ class DriveSyncService {
 
   DriveSyncService(this._authService);
 
-  /// Google AuthClient üzerinden Drive API istemcisi oluşturur
   drive.DriveApi _getDriveApi() {
     final client = _authService.authenticatedClient;
     if (client == null) {
@@ -17,7 +16,6 @@ class DriveSyncService {
     return drive.DriveApi(client);
   }
 
-  /// Office dosyalarını (DOCX, XLSX, PPTX) Drive üzerinde PDF'e çevirip indirir
   Future<File> convertOfficeToPdfViaDrive(File inputFile) async {
     final driveApi = _getDriveApi();
     final fileName = inputFile.uri.pathSegments.last;
@@ -25,7 +23,6 @@ class DriveSyncService {
     final baseName = dotIndex != -1 ? fileName.substring(0, dotIndex) : fileName;
     final ext = dotIndex != -1 ? fileName.substring(dotIndex + 1).toLowerCase() : '';
 
-    // Google Docs formatlarına eşleme
     String targetMimeType = 'application/vnd.google-apps.document';
     if (ext == 'xlsx' || ext == 'xls') {
       targetMimeType = 'application/vnd.google-apps.spreadsheet';
@@ -45,30 +42,36 @@ class DriveSyncService {
       throw Exception('Google Drive dosyası oluşturulamadı.');
     }
 
+    File? outFile;
     try {
-      // PDF olarak dışa aktar (Export)
       final responseMedia = await driveApi.files.export(
         fileId,
         'application/pdf',
         downloadOptions: drive.DownloadOptions.fullMedia,
       ) as drive.Media;
 
-      final dir = await getTemporaryDirectory();
-      final outFile = File('${dir.path}/$baseName.pdf');
+      final workingDir = await TempFileManager.workingDir;
+      outFile = File('${workingDir.path}/${baseName}_${DateTime.now().millisecondsSinceEpoch}.pdf');
+
       final sink = outFile.openWrite();
       await responseMedia.stream.pipe(sink);
+      await sink.flush(); // Bellekteki tamponları diske basıp kapat
       await sink.close();
 
       return outFile;
+    } catch (e) {
+      // İndirme yarıda kesilirse diskte bozuk 0 KB / yarım dosya kalmasın
+      if (outFile != null && await outFile.exists()) {
+        try { await outFile.delete(); } catch (_) {}
+      }
+      rethrow;
     } finally {
-      // Geçici dosyayı Drive'dan sil
       try {
         await driveApi.files.delete(fileId);
       } catch (_) {}
     }
   }
 
-  /// Oluşturulan yerel PDF dosyasını kullanıcının Google Drive'ına yedekler
   Future<drive.File> uploadPdfToDrive(File file) async {
     final driveApi = _getDriveApi();
     final fileName = file.uri.pathSegments.last;
@@ -78,8 +81,6 @@ class DriveSyncService {
       ..mimeType = 'application/pdf';
 
     final media = drive.Media(file.openRead(), file.lengthSync());
-
-    // Dosyayı Drive ana dizinine yükler
     return await driveApi.files.create(driveFile, uploadMedia: media);
   }
 }

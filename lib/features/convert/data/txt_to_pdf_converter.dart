@@ -1,63 +1,48 @@
 import 'dart:io';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:pdf/pdf.dart';
+import 'package:pdf/pdf.dart' as pw_pdf;
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
+import '../../../../core/files/temp_file_manager.dart';
 
 class TxtToPdfConverter {
-  /// .txt dosyasını Türkçe karakter destekli, başlık ve sayfa numaralı profesyonel PDF yapar.
-  static Future<File> convert(File inputFile) async {
-    final content = await inputFile.readAsString();
-    final fileName = p.basename(inputFile.path);
+  static Future<File> convert(
+      File txtFile, {
+        void Function(double progress, String status)? onProgress,
+      }) async {
+    onProgress?.call(0.1, 'Metin dosyası okunuyor...');
+    final lines = await txtFile.readAsLines();
 
-    final doc = pw.Document();
+    final pdf = pw.Document();
+    const int linesPerPage = 45;
+    final totalPages = (lines.length / linesPerPage).ceil().clamp(1, 99999);
 
-    // Türkçe karakterleri sorunsuz basmak için Google Fonts'tan Roboto fontu yüklenir
-    final font = await PdfGoogleFonts.robotoRegular();
-    final fontBold = await PdfGoogleFonts.robotoBold();
+    for (int i = 0; i < lines.length; i += linesPerPage) {
+      final pageIndex = (i / linesPerPage).floor() + 1;
+      onProgress?.call(
+        0.1 + (0.8 * (pageIndex / totalPages)),
+        'Sayfa oluşturuluyor: $pageIndex / $totalPages',
+      );
 
-    doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.symmetric(horizontal: 36, vertical: 36),
-        header: (context) => pw.Container(
-          alignment: pw.Alignment.centerRight,
-          margin: const pw.EdgeInsets.only(bottom: 12),
-          decoration: const pw.BoxDecoration(
-            border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.8)),
-          ),
-          padding: const pw.EdgeInsets.only(bottom: 4),
-          child: pw.Text(
-            fileName,
-            style: pw.TextStyle(font: font, fontSize: 9, color: PdfColors.grey600),
-          ),
-        ),
-        footer: (context) => pw.Container(
-          alignment: pw.Alignment.centerRight,
-          margin: const pw.EdgeInsets.only(top: 12),
-          child: pw.Text(
-            'Sayfa ${context.pageNumber} / ${context.pagesCount}',
-            style: pw.TextStyle(font: font, fontSize: 9, color: PdfColors.grey600),
+      final end = (i + linesPerPage < lines.length) ? i + linesPerPage : lines.length;
+      final pageLines = lines.sublist(i, end).join('\n');
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: pw_pdf.PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          build: (context) => pw.Text(
+            pageLines,
+            style: const pw.TextStyle(fontSize: 10),
           ),
         ),
-        build: (context) => [
-          pw.Text(
-            content,
-            style: pw.TextStyle(
-              font: font,
-              fontSize: 10.5,
-              lineSpacing: 3,
-            ),
-          ),
-        ],
-      ),
-    );
+      );
+    }
 
-    final dir = await getTemporaryDirectory();
-    final baseName = p.basenameWithoutExtension(inputFile.path);
-    final outFile = File('${dir.path}/${baseName}_${DateTime.now().millisecondsSinceEpoch}.pdf');
-    await outFile.writeAsBytes(await doc.save());
+    onProgress?.call(0.95, 'PDF kaydediliyor...');
+    final workingDir = await TempFileManager.workingDir;
+    final outPath = '${workingDir.path}/Metin_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final outFile = File(outPath);
+    await outFile.writeAsBytes(await pdf.save());
+
     return outFile;
   }
 }

@@ -5,7 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:provider/provider.dart';
-
+import 'package:dosya_converter/core/widgets/coversion_progress_overlay.dart';
+import 'package:dosya_converter/core/files/temp_file_manager.dart';
 import '../../../../core/theme/theme_view_model.dart';
 import '../../../../core/widgets/feedback_snack_bar.dart';
 import '../../../auth/data/google_auth_service.dart';
@@ -38,7 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ? Icons.check_circle_rounded
           : Icons.error_outline_rounded,
       backgroundColor:
-          result.isSuccess ? Colors.teal.shade700 : Colors.red.shade800,
+      result.isSuccess ? Colors.teal.shade700 : Colors.red.shade800,
     );
   }
 
@@ -46,24 +47,27 @@ class _HomeScreenState extends State<HomeScreen> {
     HapticFeedback.lightImpact();
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: false,
+      withData: false,
       type: FileType.any,
     );
 
     if (result == null || result.files.isEmpty || result.files.single.path == null) {
+      await FilePicker.platform.clearTemporaryFiles();
       return;
     }
 
     final fileToSend = File(result.files.single.path!);
-    const int maxBytes = 50 * 1024 * 1024;
+    const int maxBytes = 1024 * 1024 * 1024;
 
     if (fileToSend.lengthSync() > maxBytes) {
       if (!mounted) return;
       showFeedbackSnackBar(
         context,
-        message: 'Seçilen dosya 50 MB sınırını aşıyor!',
+        message: 'Seçilen dosya 1 GB sınırını aşıyor!',
         icon: Icons.warning_amber_rounded,
         backgroundColor: Colors.amber.shade900,
       );
+      await FilePicker.platform.clearTemporaryFiles();
       return;
     }
 
@@ -81,11 +85,15 @@ class _HomeScreenState extends State<HomeScreen> {
     HapticFeedback.selectionClick();
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
+      withData: false,
       type: FileType.custom,
       allowedExtensions: extensions,
     );
 
-    if (result == null || result.files.isEmpty) return;
+    if (result == null || result.files.isEmpty) {
+      await FilePicker.platform.clearTemporaryFiles();
+      return;
+    }
 
     if (result.files.length > 10) {
       if (!mounted) return;
@@ -95,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
         icon: Icons.info_outline_rounded,
         backgroundColor: Colors.orange.shade800,
       );
+      await FilePicker.platform.clearTemporaryFiles();
       return;
     }
 
@@ -103,10 +112,18 @@ class _HomeScreenState extends State<HomeScreen> {
         .map((file) => File(file.path!))
         .toList();
 
-    if (validFiles.isEmpty) return;
+    if (validFiles.isEmpty) {
+      await FilePicker.platform.clearTemporaryFiles();
+      return;
+    }
 
-    final op = await _home.processFiles(files: validFiles, kind: kind);
-    _notify(op);
+    try {
+      // HomeViewModel dosyaları dönüştürür ve finally bloğunda ham kopyaları yok eder!
+      final op = await _home.processFiles(files: validFiles, kind: kind);
+      _notify(op);
+    } finally {
+      await FilePicker.platform.clearTemporaryFiles();
+    }
   }
 
   Future<void> _previewFile(File file) async {
@@ -132,26 +149,33 @@ class _HomeScreenState extends State<HomeScreen> {
           ? Icons.cloud_done_rounded
           : Icons.lock_outline_rounded,
       backgroundColor:
-          op.isSuccess ? Colors.green.shade700 : Colors.amber.shade900,
+      op.isSuccess ? Colors.green.shade700 : Colors.amber.shade900,
     );
   }
 
   Future<void> _handlePdfCompression() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
+      withData: false,
       allowedExtensions: ['pdf'],
     );
 
     if (result == null || result.files.isEmpty || result.files.single.path == null) {
+      await FilePicker.platform.clearTemporaryFiles();
       return;
     }
     if (!mounted) return;
 
     final selectedPdf = File(result.files.single.path!);
-    final File? compressed = await Navigator.push<File>(
-      context,
-      MaterialPageRoute(builder: (context) => PdfCompressScreen(file: selectedPdf)),
-    );
+    File? compressed;
+    try {
+      compressed = await Navigator.push<File>(
+        context,
+        MaterialPageRoute(builder: (context) => PdfCompressScreen(file: selectedPdf)),
+      );
+    } finally {
+      await FilePicker.platform.clearTemporaryFiles();
+    }
 
     if (compressed != null && mounted) {
       _home.addResult(compressed);
@@ -168,13 +192,23 @@ class _HomeScreenState extends State<HomeScreen> {
     final picker = ImagePicker();
     final pickedFiles = await picker.pickMultiImage();
 
-    if (pickedFiles.isEmpty || !mounted) return;
+    if (pickedFiles.isEmpty || !mounted) {
+      return;
+    }
 
     final imageFiles = pickedFiles.map((x) => File(x.path)).toList();
-    final File? outputPdf = await Navigator.push<File>(
-      context,
-      MaterialPageRoute(builder: (context) => DocScannerScreen(initialImages: imageFiles)),
-    );
+    File? outputPdf;
+    try {
+      outputPdf = await Navigator.push<File>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => DocScannerScreen(initialImages: imageFiles),
+        ),
+      );
+    } finally {
+      // Ham kamera kopyalarını sil:
+      await TempFileManager.deleteFiles(imageFiles);
+    }
 
     if (outputPdf != null && mounted) {
       _home.addResult(outputPdf);
@@ -190,19 +224,45 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _handleCreateZip() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
+      withData: false,
       type: FileType.any,
     );
 
-    if (result == null || result.files.isEmpty) return;
+    if (result == null || result.files.isEmpty) {
+      await FilePicker.platform.clearTemporaryFiles();
+      return;
+    }
 
     final files = result.files
         .where((file) => file.path != null)
         .map((file) => File(file.path!))
         .toList();
 
-    if (files.isEmpty) return;
+    if (files.isEmpty) {
+      await FilePicker.platform.clearTemporaryFiles();
+      return;
+    }
 
-    _notify(await _home.createZip(files));
+    const int maxBytes = 1800 * 1024 * 1024;
+    final tooLarge = files.where((f) => f.existsSync() && f.lengthSync() > maxBytes).toList();
+    if (tooLarge.isNotEmpty) {
+      if (!mounted) return;
+      showFeedbackSnackBar(
+        context,
+        message: 'Tek bir dosya 1.8 GB sınırını aşamaz!',
+        icon: Icons.warning_amber_rounded,
+        backgroundColor: Colors.amber.shade900,
+      );
+      await FilePicker.platform.clearTemporaryFiles();
+      return;
+    }
+
+    try {
+      final op = await _home.createZip(files);
+      _notify(op);
+    } finally {
+      await FilePicker.platform.clearTemporaryFiles();
+    }
   }
 
   Future<void> _backupToGoogleDrive() async {
@@ -215,11 +275,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ? Icons.cloud_done_rounded
           : Icons.lock_outline_rounded,
       backgroundColor:
-          op.isSuccess ? Colors.teal.shade700 : Colors.amber.shade900,
+      op.isSuccess ? Colors.teal.shade700 : Colors.amber.shade900,
     );
   }
-
-  // ================= UI BUILD METOTLARI =================
 
   @override
   Widget build(BuildContext context) {
@@ -237,7 +295,6 @@ class _HomeScreenState extends State<HomeScreen> {
           CustomScrollView(
             physics: const BouncingScrollPhysics(),
             slivers: [
-              // 1. Akıcı Modern SliverAppBar
               SliverAppBar.large(
                 title: const Text(
                   'Dönüştürücü Paneli',
@@ -246,19 +303,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 actions: [
                   Consumer<ThemeViewModel>(
                     builder: (context, themeViewModel, _) => IconButton(
-                      tooltip: themeViewModel.isDark
-                          ? 'Açık temaya geç'
-                          : 'Koyu temaya geç',
+                      tooltip: themeViewModel.isDark ? 'Açık temaya geç' : 'Koyu temaya geç',
                       icon: Icon(
-                        themeViewModel.isDark
-                            ? Icons.light_mode_rounded
-                            : Icons.dark_mode_rounded,
+                        themeViewModel.isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
                       ),
                       onPressed: themeViewModel.toggle,
                     ),
                   ),
                   IconButton.filledTonal(
-                    tooltip: 'PC\'ye QR ile Aktar',
+                    tooltip: 'QR ile Dosya Paylaş',
                     icon: const Icon(Icons.qr_code_scanner_rounded),
                     onPressed: busy ? null : _handleDirectQrSend,
                   ),
@@ -271,16 +324,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(width: 8),
                 ],
               ),
-
-              // 2. Kullanıcı Profil ve Durum Kartı
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                   child: _buildAccountStatusHeader(context, googleAuth, msAuth),
                 ),
               ),
-
-              // 3. Bölüm: Popüler ve Hızlı İşlemler (Hızlı Erişim)
               SliverToBoxAdapter(
                 child: _buildSectionHeader(
                   context,
@@ -315,12 +364,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   ]),
                 ),
               ),
-
-              // 4. Bölüm: Office Doküman Dönüştürücüler
               SliverToBoxAdapter(
                 child: _buildSectionHeader(
                   context,
-                  title: 'Office Belgeleri to PDF',
+                  title: 'Office Belgeleri( Word, Excel, Powerpoint ) ⮕ PDF',
+                  subtitle: 'Kusursuz dönüşüm için Microsoft hesabı ile giriş önerilir.',
                   icon: Icons.cloud_sync_rounded,
                 ),
               ),
@@ -367,8 +415,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ]),
                 ),
               ),
-
-              // 5. Bölüm: PDF Araç Kutusu ve Arşiv
               SliverToBoxAdapter(
                 child: _buildSectionHeader(
                   context,
@@ -387,7 +433,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   delegate: SliverChildListDelegate([
                     _buildFeatureCard(
-                      title: 'Resim to PDF',
+                      title: 'Resim ⮕ PDF',
                       subtitle: 'JPG / PNG derle',
                       icon: Icons.collections_rounded,
                       accentColor: Colors.purple.shade600,
@@ -463,8 +509,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ]),
                 ),
               ),
-
-              // 6. Çıktı Dosyaları (Listelenen Alan)
               if (resultFiles.isNotEmpty) ...[
                 SliverToBoxAdapter(
                   child: Padding(
@@ -479,6 +523,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                         const Spacer(),
+                        IconButton(
+                          tooltip: 'Tümünü Temizle',
+                          icon: const Icon(Icons.delete_sweep_rounded, size: 20),
+                          color: Colors.red.shade400,
+                          onPressed: busy ? null : _home.clearAllResults,
+                        ),
                         FilledButton.tonalIcon(
                           style: FilledButton.styleFrom(
                             visualDensity: VisualDensity.compact,
@@ -513,41 +563,16 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ],
           ),
-
-          // 7. İşlem Sırasında Gösterilen Şık Progress Overlay
-          if (busy)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black45,
-                child: Center(
-                  child: Card(
-                    elevation: 6,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const CircularProgressIndicator(strokeWidth: 3),
-                          const SizedBox(height: 20),
-                          Text(
-                            home.statusMessage ?? 'İşlem yürütülüyor...',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          ConversionProgressOverlay(
+            isVisible: busy,
+            title: home.statusMessage ?? 'İşleniyor...',
+            currentFile: home.currentFileName,
+            progress: home.progress,
+          ),
         ],
       ),
     );
   }
-
-  // ================= YARDIMCI BİLEŞENLER =================
 
   Widget _buildAccountStatusHeader(
       BuildContext context,
@@ -625,22 +650,46 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildSectionHeader(BuildContext context, {required String title, required IconData icon}) {
+  Widget _buildSectionHeader(
+      BuildContext context, {
+        required String title,
+        String? subtitle, // <-- Alt başlık parametresi
+        required IconData icon,
+      }) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 10),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: theme.colorScheme.primary),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.2,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
+          Row(
+            children: [
+              Icon(icon, size: 18, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.2,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.only(left: 26), // İkonun hizasına denk getirdik
+              child: Text(
+                subtitle,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -772,55 +821,66 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-        onTap: () => _previewFile(file),
-        leading: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: isPdf ? Colors.red.withValues(alpha: 0.1) : colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(
-            isPdf ? Icons.picture_as_pdf_rounded : Icons.insert_drive_file_rounded,
-            color: isPdf ? Colors.red.shade700 : colorScheme.primary,
-            size: 22,
-          ),
-        ),
-        title: Text(
-          fileName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-        ),
-        subtitle: Text(
-          '$fileSizeKB KB • Dokun ve Görüntüle',
-          style: TextStyle(fontSize: 11, color: colorScheme.outline),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              tooltip: 'QR ile PC\'ye Aktar',
-              icon: const Icon(Icons.qr_code_rounded, size: 20),
-              color: Colors.teal.shade700,
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => QrShareScreen(file: file)),
-                );
-              },
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+          onTap: () => _previewFile(file),
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: isPdf ? Colors.red.withValues(alpha: 0.1) : colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(10),
             ),
-            IconButton(
-              tooltip: 'Drive\'a Yükle',
-              icon: const Icon(Icons.cloud_upload_outlined, size: 20),
-              color: Colors.blue.shade700,
-              onPressed: context.watch<HomeViewModel>().busy
-                  ? null
-                  : () => _backupSingleFileToDrive(file),
+            child: Icon(
+              isPdf ? Icons.picture_as_pdf_rounded : Icons.insert_drive_file_rounded,
+              color: isPdf ? Colors.red.shade700 : colorScheme.primary,
+              size: 22,
             ),
-          ],
+          ),
+          title: Text(
+            fileName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
+          subtitle: Text(
+            '$fileSizeKB KB • Dokun ve Görüntüle',
+            style: TextStyle(fontSize: 11, color: colorScheme.outline),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'QR ile PC\'ye Aktar',
+                icon: const Icon(Icons.qr_code_rounded, size: 20),
+                color: Colors.teal.shade700,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => QrShareScreen(file: file)),
+                  );
+                },
+              ),
+              IconButton(
+                tooltip: 'Drive\'a Yükle',
+                icon: const Icon(Icons.cloud_upload_outlined, size: 20),
+                color: Colors.blue.shade700,
+                onPressed: context.watch<HomeViewModel>().busy
+                    ? null
+                    : () => _backupSingleFileToDrive(file),
+              ),
+              IconButton(
+                tooltip: 'Listeden ve Diskten Sil',
+                icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                color: Colors.red.shade400,
+                onPressed: () => _home.removeResult(file),
+              ),
+            ],
+          ),
         ),
       ),
     );

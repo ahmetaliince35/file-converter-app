@@ -5,29 +5,24 @@ import 'package:path/path.dart' as p;
 
 class QrShareServer {
   HttpServer? _server;
-  final int _port = 8080;
 
   /// Doğru yerel Wi-Fi IP'sini garantiye alır
   static Future<String?> getLocalIp() async {
     try {
-      // 1. Öncelik: NetworkInfo eklentisi
       final info = NetworkInfo();
       final wifiIp = await info.getWifiIP();
       if (wifiIp != null && wifiIp.isNotEmpty && wifiIp != '0.0.0.0') {
         return wifiIp;
       }
 
-      // 2. Öncelik: Ağ arayüzlerini filtrele (özellikle wlan0)
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
         includeLinkLocal: false,
       );
 
-      // wlan veya wifi isimli arayüzü öne al
       for (final interface in interfaces) {
-        if (interface.name.toLowerCase().contains('wlan') ||
-            interface.name.toLowerCase().contains('wifi') ||
-            interface.name.toLowerCase().contains('en0')) {
+        final name = interface.name.toLowerCase();
+        if (name.contains('wlan') || name.contains('wifi') || name.contains('en0')) {
           for (final addr in interface.addresses) {
             if (!addr.isLoopback && !addr.isLinkLocal) {
               return addr.address;
@@ -36,7 +31,6 @@ class QrShareServer {
         }
       }
 
-      // Bulunamazsa standart döngü
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
           if (!addr.isLoopback && !addr.isLinkLocal) {
@@ -58,20 +52,24 @@ class QrShareServer {
       throw Exception('Wi-Fi IP adresi alınamadı. Lütfen Wi-Fi bağlantınızı kontrol edin.');
     }
 
-    // shared: true arka plan thread çakışmalarını önler
+    // Port 0 vererek sistemden anında boş ve garanti bir port talep ediyoruz (Çakışma önleyici)
     _server = await HttpServer.bind(
       InternetAddress.anyIPv4,
-      _port,
+      8080,
       shared: true,
-    );
+    ).catchError((_) {
+      // 8080 doluysa otomatik serbest bir porta geç
+      return HttpServer.bind(InternetAddress.anyIPv4, 0, shared: true);
+    });
 
-    final fileName = p.basename(file.path);
+    final actualPort = _server!.port;
+    final rawFileName = p.basename(file.path);
+    final encodedFileName = Uri.encodeComponent(rawFileName);
     final fileLength = await file.length();
 
     _server!.listen(
           (HttpRequest request) async {
         try {
-          // CORS başlıkları ekle (Tarayıcı güvenlik engellerini aşmak için)
           request.response.headers.add('Access-Control-Allow-Origin', '*');
           request.response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS');
           request.response.headers.add('Access-Control-Allow-Headers', '*');
@@ -82,9 +80,10 @@ class QrShareServer {
             return;
           }
 
+          // RFC 5987 standardı: Türkçe ve özel karakterli dosya adlarını tarayıcılarda kusursuz korur
           request.response.headers.set(
             'Content-Disposition',
-            'attachment; filename="$fileName"',
+            'attachment; filename="$rawFileName"; filename*=UTF-8\'\'$encodedFileName',
           );
           request.response.headers.set(
             'Content-Type',
@@ -94,9 +93,11 @@ class QrShareServer {
 
           await request.response.addStream(file.openRead());
         } catch (e) {
-          debugPrint('Dosya akıtılırken hata: $e');
+          debugPrint('Dosya aktarım hatası (kullanıcı indirmeyi kesmiş olabilir): $e');
         } finally {
-          await request.response.close();
+          try {
+            await request.response.close();
+          } catch (_) {}
         }
       },
       onError: (err) {
@@ -104,12 +105,14 @@ class QrShareServer {
       },
     );
 
-    return 'http://$ip:$_port/download';
+    return 'http://$ip:$actualPort/download';
   }
 
   Future<void> stop() async {
     if (_server != null) {
-      await _server!.close(force: true);
+      try {
+        await _server!.close(force: true);
+      } catch (_) {}
       _server = null;
     }
   }

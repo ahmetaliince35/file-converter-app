@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:path/path.dart' as p;
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/file_share_service.dart';
 
@@ -19,10 +19,15 @@ class _QrShareScreenState extends State<QrShareScreen> {
   String? _downloadUrl;
   bool _isLoading = true;
   String? _error;
+  late final String _fileName;
+  late final String _fileSizeMb;
 
   @override
   void initState() {
     super.initState();
+    _fileName = p.basename(widget.file.path);
+    final bytes = widget.file.existsSync() ? widget.file.lengthSync() : 0;
+    _fileSizeMb = (bytes / (1024 * 1024)).toStringAsFixed(2);
     _baslat();
   }
 
@@ -41,11 +46,11 @@ class _QrShareScreenState extends State<QrShareScreen> {
 
   Future<void> _baslat() async {
     try {
-      // 50 MB sınır kontrolü
-      const int maxLimitBytes = 50 * 1024 * 1024;
+      // HomeScreen ile uyumlu 1 GB sınırı (HTTP streaming bellek tüketmez)
+      const int maxLimitBytes = 1024 * 1024 * 1024;
       final fileLength = await widget.file.length();
       if (fileLength > maxLimitBytes) {
-        throw Exception('Dosya 50 MB sınırını aşıyor.');
+        throw Exception('Dosya 1 GB sınırını aşıyor.');
       }
 
       setState(() {
@@ -53,7 +58,6 @@ class _QrShareScreenState extends State<QrShareScreen> {
         _error = null;
       });
 
-      // Doğrudan dosyayı sunucuya veriyoruz, ZIP yok, donma yok
       final url = await _server.start(widget.file);
 
       if (mounted) {
@@ -221,9 +225,6 @@ class _QrShareScreenState extends State<QrShareScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final fileName = p.basename(widget.file.path);
-    final fileSizeMb = (widget.file.lengthSync() / (1024 * 1024)).toStringAsFixed(2);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('QR ile Hızlı İndir'),
@@ -284,13 +285,13 @@ class _QrShareScreenState extends State<QrShareScreen> {
               ),
               const SizedBox(height: 24),
               Text(
-                fileName,
+                _fileName,
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
               Text(
-                '$fileSizeMb MB',
+                '$_fileSizeMb MB',
                 style: const TextStyle(color: Colors.grey, fontSize: 13),
               ),
               const SizedBox(height: 20),

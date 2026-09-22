@@ -1,58 +1,85 @@
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import '../../../../core/files/temp_file_manager.dart';
 
 class MicrosoftGraphService {
   final String accessToken;
 
   MicrosoftGraphService(this.accessToken);
 
-  /// Word, Excel veya PPTX dosyasını Microsoft'un resmi motoruyla PDF'e dönüştürür
   Future<File> convertOfficeToPdf(File inputFile) async {
     final fileName = inputFile.uri.pathSegments.last;
     final dotIndex = fileName.lastIndexOf('.');
     final baseName = dotIndex != -1 ? fileName.substring(0, dotIndex) : fileName;
     final tempUploadName = 'temp_${DateTime.now().millisecondsSinceEpoch}_$fileName';
 
-    final headers = {
-      'Authorization': 'Bearer $accessToken',
-    };
-
-    // 1. Dosyayı geçici olarak OneDrive kök dizinine yükle
     final uploadUrl = Uri.parse(
       'https://graph.microsoft.com/v1.0/me/drive/root:/$tempUploadName:/content',
     );
-    final fileBytes = await inputFile.readAsBytes();
-    final uploadRes = await http.put(uploadUrl, headers: headers, body: fileBytes);
+
+    // Stream ile dosya yüklemek için StreamedRequest kullanılır:
+    final uploadRequest = http.StreamedRequest('PUT', uploadUrl)
+      ..headers.addAll({
+        'Authorization': 'Bearer $accessToken',
+        'Content-Type': 'application/octet-stream',
+      })
+      ..contentLength = inputFile.lengthSync();
+
+    // Dosyayı RAM'e almadan parçalar halinde HTTP soketine akıtıyoruz:
+    inputFile.openRead().listen(
+      uploadRequest.sink.add,
+      onDone: uploadRequest.sink.close,
+      onError: uploadRequest.sink.addError,
+      cancelOnError: true,
+    );
+
+    final streamedResponse = await uploadRequest.send();
+    final uploadRes = await http.Response.fromStream(streamedResponse);
 
     if (uploadRes.statusCode != 200 && uploadRes.statusCode != 201) {
       throw Exception('OneDrive yükleme hatası: ${uploadRes.statusCode} - ${uploadRes.body}');
     }
 
+    File? outFile;
     try {
-      // 2. Microsoft Word/Office render motorundan orijinal kalitede PDF al
       final convertUrl = Uri.parse(
         'https://graph.microsoft.com/v1.0/me/drive/root:/$tempUploadName:/content?format=pdf',
       );
-      final pdfRes = await http.get(convertUrl, headers: headers);
 
-      if (pdfRes.statusCode != 200) {
-        throw Exception('Microsoft PDF dönüştürme hatası: ${pdfRes.statusCode}');
+      final pdfRequest = http.Request('GET', convertUrl)
+        ..headers.addAll({'Authorization': 'Bearer $accessToken'});
+
+      final pdfStreamedResponse = await pdfRequest.send();
+
+      if (pdfStreamedResponse.statusCode != 200) {
+        throw Exception('Microsoft PDF dönüştürme hatası: ${pdfStreamedResponse.statusCode}');
       }
 
-      // 3. Cihaza yerel dosya olarak kaydet
-      final dir = await getTemporaryDirectory();
-      final outFile = File('${dir.path}/$baseName.pdf');
-      await outFile.writeAsBytes(pdfRes.bodyBytes);
+      final workingDir = await TempFileManager.workingDir;
+      outFile = File('${workingDir.path}/${baseName}_${DateTime.now().millisecondsSinceEpoch}.pdf');
+
+      final sink = outFile.openWrite();
+      await pdfStreamedResponse.stream.pipe(sink);
+      await sink.flush();
+      await sink.close();
 
       return outFile;
+    } catch (e) {
+      if (outFile != null && await outFile.exists()) {
+        try {
+          await outFile.delete();
+        } catch (_) {}
+      }
+      rethrow;
     } finally {
-      // 4. Geçici yüklenen dosyayı OneDrive'dan temizle
       final deleteUrl = Uri.parse(
         'https://graph.microsoft.com/v1.0/me/drive/root:/$tempUploadName',
       );
       try {
-        await http.delete(deleteUrl, headers: headers);
+        await http.delete(
+          deleteUrl,
+          headers: {'Authorization': 'Bearer $accessToken'},
+        );
       } catch (_) {}
     }
   }

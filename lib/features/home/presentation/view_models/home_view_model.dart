@@ -1,9 +1,9 @@
 import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/errors/error_mapper.dart';
+import '../../../../core/files/temp_file_manager.dart';
 import '../../../auth/data/google_auth_service.dart';
 import '../../../auth/data/microsoft_auth_service.dart';
 import '../../../cloud/data/drive_sync_service.dart';
@@ -22,13 +22,12 @@ class HomeOpResult {
   final String message;
 }
 
-/// Ana panelin iş kuralları: dönüşüm, arşiv ve Drive yedekleme.
 class HomeViewModel extends ChangeNotifier {
   HomeViewModel(
-    this._googleAuth,
-    this._microsoftAuth, {
-    OfficeToPdfService officeToPdf = const OfficeToPdfService(),
-  }) : _officeToPdf = officeToPdf;
+      this._googleAuth,
+      this._microsoftAuth, {
+        OfficeToPdfService officeToPdf = const OfficeToPdfService(),
+      }) : _officeToPdf = officeToPdf;
 
   final GoogleAuthService _googleAuth;
   final MicrosoftAuthService _microsoftAuth;
@@ -36,10 +35,15 @@ class HomeViewModel extends ChangeNotifier {
 
   bool _busy = false;
   String? _statusMessage;
+  double _progress = 0.0;
+  String _currentFileName = '';
   final List<File> _resultFiles = [];
+  bool _isDisposed = false;
 
   bool get busy => _busy;
   String? get statusMessage => _statusMessage;
+  double get progress => _progress;
+  String get currentFileName => _currentFileName;
   List<File> get resultFiles => List.unmodifiable(_resultFiles);
   GoogleAuthService get googleAuth => _googleAuth;
   MicrosoftAuthService get microsoftAuth => _microsoftAuth;
@@ -49,48 +53,143 @@ class HomeViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> removeResult(File file) async {
+    _resultFiles.remove(file);
+    await TempFileManager.deleteFile(file);
+    notifyListeners();
+  }
+
+  Future<void> clearAllResults() async {
+    for (final file in _resultFiles) {
+      await TempFileManager.deleteFile(file);
+    }
+    _resultFiles.clear();
+    await TempFileManager.clearAll();
+    if (!_isDisposed) {
+      notifyListeners();
+    }
+  }
+
   Future<HomeOpResult> processFiles({
     required List<File> files,
     required ConversionKind kind,
+    bool clearPreviousSession = true,
   }) async {
-    _setBusy(true, '${files.length} dosya hazırlanıyor...');
-    try {
-      final total = files.length;
-      for (var i = 0; i < files.length; i++) {
-        final file = files[i];
-        final name = file.uri.pathSegments.last;
-        _setStatus('İşleniyor (${i + 1}/$total)\n$name');
+    if (clearPreviousSession && _resultFiles.isNotEmpty) {
+      await clearAllResults();
+    }
 
-        switch (kind) {
-          case ConversionKind.office:
-            _resultFiles.insert(
-              0,
-              await _officeToPdf.convert(
+    final total = files.length;
+    _setBusy(true, message: '$total dosya hazırlanıyor...', progress: 0.01);
+
+    try {
+      if (kind == ConversionKind.image) {
+        final outputPdf = await ImageToPdfConverter.convert(
+          files,
+          onProgress: (current, total) {
+            _updateProgress(
+              progress: current / total,
+              currentFile: 'Resim $current / $total işleniyor...',
+              message: 'Resimler PDF yapılıyor (%${((current / total) * 100).toInt()})',
+            );
+          },
+        );
+        _resultFiles.insert(0, outputPdf);
+      } else {
+        for (var i = 0; i < total; i++) {
+          final file = files[i];
+          final name = file.uri.pathSegments.last;
+
+          final baseProgress = i / total;
+          final stepWeight = 1.0 / total;
+
+          _updateProgress(
+            progress: baseProgress,
+            currentFile: name,
+            message: 'İşleniyor (${i + 1}/$total)',
+          );
+
+          switch (kind) {
+            case ConversionKind.office:
+              _updateProgress(
+                progress: baseProgress + (stepWeight * 0.3),
+                currentFile: name,
+                message: 'Bulutta PDF\'e dönüştürülüyor (${i + 1}/$total)',
+              );
+              final converted = await _officeToPdf.convert(
                 file,
                 googleAuth: _googleAuth,
                 microsoftAuth: _microsoftAuth,
-              ),
-            );
-          case ConversionKind.image:
-            _resultFiles.insert(0, await ImageToPdfConverter.convert(file));
-          case ConversionKind.txt:
-            _resultFiles.insert(0, await TxtToPdfConverter.convert(file));
-          case ConversionKind.zip:
-            _resultFiles.insertAll(0, await ZipExtractor.extract(file));
+              );
+              _resultFiles.insert(0, converted);
+
+            case ConversionKind.txt:
+              final converted = await TxtToPdfConverter.convert(
+                file,
+                onProgress: (subProgress, status) {
+                  _updateProgress(
+                    progress: baseProgress + (stepWeight * subProgress),
+                    currentFile: name,
+                    message: '$status (${i + 1}/$total)',
+                  );
+                },
+              );
+              _resultFiles.insert(0, converted);
+
+            case ConversionKind.zip:
+              _updateProgress(
+                progress: baseProgress + (stepWeight * 0.5),
+                currentFile: name,
+                message: 'Arşivden çıkartılıyor (${i + 1}/$total)',
+              );
+              _resultFiles.insertAll(0, await ZipExtractor.extract(file));
+
+            case ConversionKind.image:
+              break;
+          }
+
+          _updateProgress(
+            progress: (i + 1) / total,
+            currentFile: name,
+            message: 'Tamamlandı (${i + 1}/$total)',
+          );
         }
       }
       return HomeOpResult.success('$total dosya başarıyla dönüştürüldü.');
     } catch (error) {
       return HomeOpResult.failure(mapErrorMessage(error));
     } finally {
+      // KRİTİK: İşlem bitince tüm geçici girdi kopyalarını diskten yok et!
+      if (kind != ConversionKind.image) {
+        await TempFileManager.deleteFiles(files);
+      }
       _setBusy(false);
     }
   }
 
   Future<HomeOpResult> createZip(List<File> files) async {
-    _setBusy(true, 'Dosyalar ZIP arşivine ekleniyor...');
+    _setBusy(
+      true,
+      message: 'ZIP hazırlanıyor...',
+      progress: 0.01,
+      currentFile: 'Dosyalar taranıyor...',
+    );
+
     try {
-      final zipFile = await ZipCreatorService.createZipFromFiles(files);
+      final zipFile = await ZipCreatorService.createZipFromFiles(
+        files,
+        onProgress: (progress, currentFile, processedBytes, totalBytes) {
+          final processedMB = (processedBytes / (1024 * 1024)).toStringAsFixed(1);
+          final totalMB = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+
+          _updateProgress(
+            progress: progress,
+            currentFile: '$currentFile ($processedMB / $totalMB MB)',
+            message: 'Arşivleniyor (%${(progress * 100).toInt()})',
+          );
+        },
+      );
+
       _resultFiles.insert(0, zipFile);
       return HomeOpResult.success('${files.length} dosya ZIP arşivlendi!');
     } catch (error) {
@@ -105,10 +204,22 @@ class HomeViewModel extends ChangeNotifier {
       return const HomeOpResult.failure('Yedekleme için Google girişi yapılmadı.');
     }
 
-    _setBusy(true, '${file.uri.pathSegments.last}\nDrive\'a aktarılıyor...');
+    final fileName = file.uri.pathSegments.last;
+    _setBusy(
+      true,
+      message: 'Drive\'a aktarılıyor...',
+      progress: 0.2,
+      currentFile: fileName,
+    );
+
     try {
       await DriveSyncService(_googleAuth).uploadPdfToDrive(file);
-      return HomeOpResult.success('${file.uri.pathSegments.last} Drive\'a yüklendi!');
+      _updateProgress(
+        progress: 1.0,
+        currentFile: fileName,
+        message: 'Yedekleme tamamlandı!',
+      );
+      return HomeOpResult.success('$fileName Drive\'a yüklendi!');
     } catch (error) {
       return HomeOpResult.failure('Yükleme hatası: $error');
     } finally {
@@ -121,19 +232,27 @@ class HomeViewModel extends ChangeNotifier {
       return const HomeOpResult.failure('Yedeklenecek dosya yok.');
     }
     if (!await _ensureGoogleSignedIn()) {
-      return const HomeOpResult.failure(
-        'Yedekleme için Google girişi onaylanmadı.',
-      );
+      return const HomeOpResult.failure('Yedekleme için Google girişi onaylanmadı.');
     }
 
-    _setBusy(true, 'Google Drive\'a toplu aktarım başlatılıyor...');
+    final total = _resultFiles.length;
+    _setBusy(true, message: 'Drive\'a aktarım başlatılıyor...', progress: 0.01);
+
     try {
       final driveService = DriveSyncService(_googleAuth);
       var count = 0;
+
       for (final file in _resultFiles) {
-        await driveService.uploadPdfToDrive(file);
+        final name = file.uri.pathSegments.last;
         count++;
-        _setStatus('Drive\'a yükleniyor ($count/${_resultFiles.length})...');
+
+        _updateProgress(
+          progress: count / total,
+          currentFile: name,
+          message: 'Drive\'a yükleniyor ($count/$total)',
+        );
+
+        await driveService.uploadPdfToDrive(file);
       }
       return HomeOpResult.success('$count dosya Drive\'a yedeklendi!');
     } catch (error) {
@@ -158,14 +277,38 @@ class HomeViewModel extends ChangeNotifier {
     return _googleAuth.signIn();
   }
 
-  void _setBusy(bool value, [String? message]) {
+  void _setBusy(
+      bool value, {
+        String? message,
+        double progress = 0.0,
+        String currentFile = '',
+      }) {
     _busy = value;
     _statusMessage = value ? message : null;
+    _progress = value ? progress : 0.0;
+    _currentFileName = value ? currentFile : '';
     notifyListeners();
   }
 
-  void _setStatus(String message) {
+  void _updateProgress({
+    required double progress,
+    required String currentFile,
+    required String message,
+  }) {
+    _progress = progress.clamp(0.0, 1.0);
+    _currentFileName = currentFile;
     _statusMessage = message;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    for (final file in _resultFiles) {
+      TempFileManager.deleteFile(file);
+    }
+    _resultFiles.clear();
+    TempFileManager.clearAll();
+    super.dispose();
   }
 }

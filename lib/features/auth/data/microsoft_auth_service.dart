@@ -63,15 +63,25 @@ class MicrosoftAuthService extends ChangeNotifier {
     }
   }
 
+  /// Her zaman güncel token almak için doğrudan oauth istemcisini sorgular
   Future<String?> getAccessToken() async {
-    _accessToken ??= await _oauth.getAccessToken();
-    return _accessToken;
+    try {
+      final token = await _oauth.getAccessToken();
+      if (token != null) {
+        _accessToken = token;
+      }
+      return _accessToken;
+    } catch (_) {
+      return _accessToken;
+    }
   }
 
   Future<void> signOut() async {
     try {
       await _oauth.logout();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Microsoft Sign-Out Hatası: $e');
+    }
     _accessToken = null;
     _userEmail = null;
     notifyListeners();

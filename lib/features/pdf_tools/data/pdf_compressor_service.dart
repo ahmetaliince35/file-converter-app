@@ -2,15 +2,16 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart' as pw_pdf;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdfx/pdfx.dart' as px;
 
+import '../../../../core/files/temp_file_manager.dart';
+
 enum CompressionLevel {
-  low(quality: 80, scale: 1.5, label: 'Hafif Sıkıştırma (Yüksek Kalite)'),
-  medium(quality: 60, scale: 1.2, label: 'Önerilen (Dengeli Boyut ve Netlik)'),
-  high(quality: 40, scale: 0.9, label: 'Yüksek Sıkıştırma (Minimum Boyut)');
+  low(quality: 80, scale: 1.4, label: 'Hafif Sıkıştırma (Yüksek Kalite)'),
+  medium(quality: 60, scale: 1.1, label: 'Önerilen (Dengeli Boyut ve Netlik)'),
+  high(quality: 40, scale: 0.85, label: 'Yüksek Sıkıştırma (Minimum Boyut)');
 
   final int quality;
   final double scale;
@@ -54,54 +55,58 @@ class PdfCompressorService {
 
     final outputPdf = pw.Document();
 
-    for (int i = 1; i <= totalPages; i++) {
-      if (onProgress != null) {
-        onProgress(i, totalPages);
+    try {
+      for (int i = 1; i <= totalPages; i++) {
+        onProgress?.call(i, totalPages);
+
+        final page = await document.getPage(i);
+        final renderWidth = (page.width * level.scale).toInt();
+        final renderHeight = (page.height * level.scale).toInt();
+
+        // format: jpeg doğrudan native Pdfium seviyesinde hafif bayt üretir
+        final pageImage = await page.render(
+          width: renderWidth.toDouble(),
+          height: renderHeight.toDouble(),
+          format: px.PdfPageImageFormat.jpeg,
+          quality: level.quality,
+        );
+        await page.close();
+
+        if (pageImage == null) continue;
+
+        // Gerekirse ek sıkıştırma izolatörüne gönder
+        final compressedJpgBytes = await compute(
+          _compressImageWorker,
+          _CompressTask(
+            rawBytes: pageImage.bytes,
+            targetQuality: level.quality,
+          ),
+        );
+
+        final imageProvider = pw.MemoryImage(compressedJpgBytes);
+        outputPdf.addPage(
+          pw.Page(
+            pageFormat: pw_pdf.PdfPageFormat(page.width, page.height),
+            margin: pw.EdgeInsets.zero,
+            build: (context) {
+              return pw.FullPage(
+                ignoreMargins: true,
+                child: pw.Image(imageProvider, fit: pw.BoxFit.fill),
+              );
+            },
+          ),
+        );
       }
-
-      final page = await document.getPage(i);
-      final renderWidth = (page.width * level.scale).toInt();
-      final renderHeight = (page.height * level.scale).toInt();
-
-      final pageImage = await page.render(
-        width: renderWidth.toDouble(),
-        height: renderHeight.toDouble(),
-        format: px.PdfPageImageFormat.png,
-      );
-      await page.close();
-
-      if (pageImage == null) continue;
-
-      // Arka planda JPEG sıkıştırması
-      final compressedJpgBytes = await compute(
-        _compressImageWorker,
-        _CompressTask(
-          rawBytes: pageImage.bytes,
-          targetQuality: level.quality,
-        ),
-      );
-
-      final imageProvider = pw.MemoryImage(compressedJpgBytes);
-      outputPdf.addPage(
-        pw.Page(
-          pageFormat: pw_pdf.PdfPageFormat(page.width, page.height),
-          margin: pw.EdgeInsets.zero,
-          build: (context) {
-            return pw.FullPage(
-              ignoreMargins: true,
-              child: pw.Image(imageProvider, fit: pw.BoxFit.fill),
-            );
-          },
-        ),
-      );
+    } finally {
+      // Hata olsa bile Pdfium belgesini kapatıp native RAM'i serbest bırakıyoruz:
+      await document.close();
     }
 
-    await document.close();
-
-    final tempDir = await getTemporaryDirectory();
+    // TempFileManager çalışma dizinine yazarak depolama hijyenini koruyoruz:
+    final workingDir = await TempFileManager.workingDir;
     final baseName = p.basenameWithoutExtension(sourceFile.path);
     final outFileName = '${baseName}_sikistirilmis_${DateTime.now().millisecondsSinceEpoch}.pdf';
-    final outFile = File('${tempDir.path}/$outFileName');
+    final outFile = File('${workingDir.path}/$outFileName');
 
     final savedBytes = await outputPdf.save();
     await outFile.writeAsBytes(savedBytes);
@@ -125,7 +130,6 @@ Uint8List _compressImageWorker(_CompressTask task) {
   final decoded = img.decodeImage(task.rawBytes);
   if (decoded == null) return task.rawBytes;
 
-  // JPEG olarak seçilen kalitede tekrar kodla
   final jpgBytes = img.encodeJpg(decoded, quality: task.targetQuality);
   return Uint8List.fromList(jpgBytes);
 }

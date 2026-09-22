@@ -5,16 +5,16 @@ import 'package:googleapis_auth/googleapis_auth.dart' as auth;
 import 'package:googleapis/drive/v3.dart' as drive;
 
 class GoogleAuthService extends ChangeNotifier {
+  // Sadece uygulamanın oluşturduğu dosyaları yönetmek için yeterli kapsam
   static const List<String> _scopes = [
     drive.DriveApi.driveFileScope,
-    drive.DriveApi.driveAppdataScope,
   ];
 
   final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: _scopes);
 
   GoogleSignInAccount? _currentUser;
   auth.AuthClient? _authenticatedClient;
-  bool _isChecking = true; // İlk açılış kontrolü için
+  bool _isChecking = true;
 
   GoogleSignInAccount? get currentUser => _currentUser;
   bool get isSignedIn => _currentUser != null;
@@ -24,8 +24,17 @@ class GoogleAuthService extends ChangeNotifier {
   GoogleAuthService() {
     _googleSignIn.onCurrentUserChanged.listen((account) async {
       _currentUser = account;
+
+      // Eski istemciyi temizle ve kapat
+      _authenticatedClient?.close();
+
       if (_currentUser != null) {
-        _authenticatedClient = await _googleSignIn.authenticatedClient();
+        try {
+          _authenticatedClient = await _googleSignIn.authenticatedClient();
+        } catch (e) {
+          debugPrint('Google client oluşturma hatası: $e');
+          _authenticatedClient = null;
+        }
       } else {
         _authenticatedClient = null;
       }
@@ -34,7 +43,6 @@ class GoogleAuthService extends ChangeNotifier {
     });
   }
 
-  /// Uygulama ilk açıldığında arka planda sessizce çağrılır
   Future<void> initSilently() async {
     try {
       await _googleSignIn.signInSilently();
@@ -49,12 +57,8 @@ class GoogleAuthService extends ChangeNotifier {
   Future<bool> signIn() async {
     try {
       final account = await _googleSignIn.signIn();
-      if (account == null) return false;
-
-      _currentUser = account;
-      _authenticatedClient = await _googleSignIn.authenticatedClient();
-      notifyListeners();
-      return true;
+      // onCurrentUserChanged zaten authenticatedClient'ı kurup notifyListeners() çağıracaktır.
+      return account != null;
     } catch (e) {
       debugPrint('Google Sign-In Hatası: $e');
       return false;
@@ -67,8 +71,15 @@ class GoogleAuthService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Google Sign-Out Hatası: $e');
     }
-    _currentUser = null;
+    _authenticatedClient?.close();
     _authenticatedClient = null;
+    _currentUser = null;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _authenticatedClient?.close();
+    super.dispose();
   }
 }
