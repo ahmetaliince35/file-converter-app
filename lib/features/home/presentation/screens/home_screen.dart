@@ -82,7 +82,10 @@ class _HomeScreenState extends State<HomeScreen> {
     required List<String> extensions,
     required ConversionKind kind,
   }) async {
+    debugPrint('====================================');
+    debugPrint('[DEBUG 1] Butona basildi, secici aciliyor...');
     HapticFeedback.selectionClick();
+
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       withData: false,
@@ -91,20 +94,20 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (result == null || result.files.isEmpty) {
-      await FilePicker.platform.clearTemporaryFiles();
+      debugPrint('[DEBUG 2] Secim iptal edildi.');
       return;
     }
 
-    if (result.files.length > 10) {
-      if (!mounted) return;
-      showFeedbackSnackBar(
-        context,
-        message: 'En fazla 10 dosya seçebilirsiniz! Lütfen tekrar seçin.',
-        icon: Icons.info_outline_rounded,
-        backgroundColor: Colors.orange.shade800,
-      );
-      await FilePicker.platform.clearTemporaryFiles();
-      return;
+    final rawPath = result.files.single.path;
+    debugPrint('[DEBUG 3] Secilen Ham Yol: $rawPath');
+
+    if (rawPath != null) {
+      final f = File(rawPath);
+      final exists = await f.exists();
+      debugPrint('[DEBUG 4] Dosya Secildigi An Diskte Var Mi?: $exists');
+      if (exists) {
+        debugPrint('[DEBUG 5] Dosya Boyutu: ${await f.length()} bayt');
+      }
     }
 
     final validFiles = result.files
@@ -112,20 +115,18 @@ class _HomeScreenState extends State<HomeScreen> {
         .map((file) => File(file.path!))
         .toList();
 
-    if (validFiles.isEmpty) {
-      await FilePicker.platform.clearTemporaryFiles();
-      return;
-    }
+    debugPrint('[DEBUG 6] ViewModel\'e gonderiliyor... Dosya sayisi: ${validFiles.length}');
 
     try {
-      // HomeViewModel dosyaları dönüştürür ve finally bloğunda ham kopyaları yok eder!
       final op = await _home.processFiles(files: validFiles, kind: kind);
+      debugPrint('[DEBUG 7] ViewModel Sonucu: ${op.message} (Basari: ${op.isSuccess})');
       _notify(op);
-    } finally {
-      await FilePicker.platform.clearTemporaryFiles();
+    } catch (e, stack) {
+      debugPrint('[DEBUG HATA YAKALANDI] Tur: $e');
+      debugPrint('[DEBUG STACK TRACE]:\n$stack');
     }
+    debugPrint('====================================');
   }
-
   Future<void> _previewFile(File file) async {
     HapticFeedback.lightImpact();
     final result = await OpenFilex.open(file.path);

@@ -4,6 +4,9 @@ import 'package:path/path.dart' as p;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/file_share_service.dart';
+import '../../../../core/widgets/share_link_card.dart';
+
+enum ShareType { qr, link }
 
 class QrShareScreen extends StatefulWidget {
   final File file;
@@ -16,7 +19,8 @@ class QrShareScreen extends StatefulWidget {
 
 class _QrShareScreenState extends State<QrShareScreen> {
   final QrShareServer _server = QrShareServer();
-  String? _downloadUrl;
+  ShareResult? _shareResult;
+  ShareType _selectedType = ShareType.qr;
   bool _isLoading = true;
   String? _error;
   late final String _fileName;
@@ -46,7 +50,6 @@ class _QrShareScreenState extends State<QrShareScreen> {
 
   Future<void> _baslat() async {
     try {
-      // HomeScreen ile uyumlu 1 GB sınırı (HTTP streaming bellek tüketmez)
       const int maxLimitBytes = 1024 * 1024 * 1024;
       final fileLength = await widget.file.length();
       if (fileLength > maxLimitBytes) {
@@ -58,11 +61,11 @@ class _QrShareScreenState extends State<QrShareScreen> {
         _error = null;
       });
 
-      final url = await _server.start(widget.file);
+      final result = await _server.start(widget.file);
 
       if (mounted) {
         setState(() {
-          _downloadUrl = url;
+          _shareResult = result;
           _isLoading = false;
         });
         _checkFirstTimeGuide();
@@ -125,8 +128,8 @@ class _QrShareScreenState extends State<QrShareScreen> {
               const SizedBox(height: 14),
               _buildStepRow(
                 number: '2',
-                title: 'Kamerayla QR Kodu Okutun',
-                desc: 'Karşı cihazın kamerasını açıp ekrandaki QR kodu taratın.',
+                title: 'QR veya Bağlantı Seçimi',
+                desc: 'QR okutursanız doğrudan iner. Bağlantı paylaşırsanız ekrandaki PIN kodunu girmek gerekir.',
                 icon: Icons.qr_code_scanner_rounded,
               ),
               const SizedBox(height: 14),
@@ -195,11 +198,7 @@ class _QrShareScreenState extends State<QrShareScreen> {
           backgroundColor: Colors.indigo.shade100,
           child: Text(
             number,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-              color: Colors.indigo,
-            ),
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.indigo),
           ),
         ),
         const SizedBox(width: 12),
@@ -207,15 +206,9 @@ class _QrShareScreenState extends State<QrShareScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                title,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-              ),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
               const SizedBox(height: 2),
-              Text(
-                desc,
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-              ),
+              Text(desc, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
             ],
           ),
         ),
@@ -227,7 +220,7 @@ class _QrShareScreenState extends State<QrShareScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('QR ile Hızlı İndir'),
+        title: const Text('Dosya Paylaş'),
         actions: [
           TextButton.icon(
             onPressed: () => _showHelpModal(isFirstTime: false),
@@ -264,25 +257,54 @@ class _QrShareScreenState extends State<QrShareScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 20,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: QrImageView(
-                  data: _downloadUrl ?? '',
-                  version: QrVersions.auto,
-                  size: 220.0,
-                ),
+              SegmentedButton<ShareType>(
+                segments: const [
+                  ButtonSegment(
+                    value: ShareType.qr,
+                    label: Text('QR ile Paylaş'),
+                    icon: Icon(Icons.qr_code_rounded),
+                  ),
+                  ButtonSegment(
+                    value: ShareType.link,
+                    label: Text('Link Paylaş'),
+                    icon: Icon(Icons.link_rounded),
+                  ),
+                ],
+                selected: {_selectedType},
+                onSelectionChanged: (set) => setState(() => _selectedType = set.first),
               ),
+              const SizedBox(height: 24),
+              if (_selectedType == ShareType.qr) ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 20,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: QrImageView(
+                    data: _shareResult?.qrUrl ?? '',
+                    version: QrVersions.auto,
+                    size: 220.0,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Kamerayla okutunca şifresiz doğrudan iner.',
+                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                ),
+              ] else ...[
+                ShareLinkCard(
+                  webUrl: _shareResult?.webUrl ?? '',
+                  pin: _shareResult?.pin ?? '',
+                ),
+              ],
               const SizedBox(height: 24),
               Text(
                 _fileName,
@@ -293,36 +315,6 @@ class _QrShareScreenState extends State<QrShareScreen> {
               Text(
                 '$_fileSizeMb MB',
                 style: const TextStyle(color: Colors.grey, fontSize: 13),
-              ),
-              const SizedBox(height: 20),
-              InkWell(
-                onTap: () => _showHelpModal(isFirstTime: false),
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.indigo.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.indigo.shade100),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.qr_code_scanner, color: Colors.indigo, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        'Aynı Wi-Fi ağından kamerayla okutun',
-                        style: TextStyle(
-                          color: Colors.indigo,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
-                      ),
-                      SizedBox(width: 4),
-                      Icon(Icons.chevron_right_rounded, color: Colors.indigo, size: 18),
-                    ],
-                  ),
-                ),
               ),
             ],
           ),

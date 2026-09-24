@@ -2,11 +2,23 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:path/path.dart' as p;
+import 'share_auth_helper.dart';
+
+class ShareResult {
+  final String qrUrl;
+  final String webUrl;
+  final String pin;
+
+  ShareResult({
+    required this.qrUrl,
+    required this.webUrl,
+    required this.pin,
+  });
+}
 
 class QrShareServer {
   HttpServer? _server;
 
-  /// Doğru yerel Wi-Fi IP'sini garantiye alır
   static Future<String?> getLocalIp() async {
     try {
       final info = NetworkInfo();
@@ -44,7 +56,7 @@ class QrShareServer {
     return null;
   }
 
-  Future<String> start(File file) async {
+  Future<ShareResult> start(File file) async {
     await stop();
 
     final ip = await getLocalIp();
@@ -52,13 +64,11 @@ class QrShareServer {
       throw Exception('Wi-Fi IP adresi alınamadı. Lütfen Wi-Fi bağlantınızı kontrol edin.');
     }
 
-    // Port 0 vererek sistemden anında boş ve garanti bir port talep ediyoruz (Çakışma önleyici)
     _server = await HttpServer.bind(
       InternetAddress.anyIPv4,
       8080,
       shared: true,
     ).catchError((_) {
-      // 8080 doluysa otomatik serbest bir porta geç
       return HttpServer.bind(InternetAddress.anyIPv4, 0, shared: true);
     });
 
@@ -66,6 +76,9 @@ class QrShareServer {
     final rawFileName = p.basename(file.path);
     final encodedFileName = Uri.encodeComponent(rawFileName);
     final fileLength = await file.length();
+
+    final pin = ShareAuthHelper.generatePin();
+    final directToken = ShareAuthHelper.generateDirectToken();
 
     _server!.listen(
           (HttpRequest request) async {
@@ -80,20 +93,40 @@ class QrShareServer {
             return;
           }
 
-          // RFC 5987 standardı: Türkçe ve özel karakterli dosya adlarını tarayıcılarda kusursuz korur
-          request.response.headers.set(
-            'Content-Disposition',
-            'attachment; filename="$rawFileName"; filename*=UTF-8\'\'$encodedFileName',
-          );
-          request.response.headers.set(
-            'Content-Type',
-            'application/octet-stream',
-          );
-          request.response.contentLength = fileLength;
+          final path = request.uri.path;
+          final queryPin = request.uri.queryParameters['pin'];
+          final queryToken = request.uri.queryParameters['token'];
 
-          await request.response.addStream(file.openRead());
+          // 1. İndirme İsteği: QR ile gelen token ya da tarayıcıdan girilen PIN kontrol edilir
+          if (path == '/download') {
+            final isAuthorized = (queryToken == directToken) || (queryPin == pin);
+            if (isAuthorized) {
+              request.response.headers.set(
+                'Content-Disposition',
+                'attachment; filename="$rawFileName"; filename*=UTF-8\'\'$encodedFileName',
+              );
+              request.response.headers.set('Content-Type', 'application/octet-stream');
+              request.response.contentLength = fileLength;
+              await request.response.addStream(file.openRead());
+              return;
+            } else {
+              request.response.statusCode = HttpStatus.forbidden;
+              request.response.headers.set('Content-Type', 'text/plain; charset=utf-8');
+              request.response.write('Hatalı PIN kodu veya yetkisiz erişim!');
+              return;
+            }
+          }
+
+          // 2. Kök Dizin: Link açıldığında şifre giriş formu gösterilir
+          if (path == '/' || path.isEmpty) {
+            request.response.headers.set('Content-Type', 'text/html; charset=utf-8');
+            request.response.write(ShareAuthHelper.buildPinHtml(fileName: rawFileName));
+            return;
+          }
+
+          request.response.statusCode = HttpStatus.notFound;
         } catch (e) {
-          debugPrint('Dosya aktarım hatası (kullanıcı indirmeyi kesmiş olabilir): $e');
+          debugPrint('Dosya aktarım hatası: $e');
         } finally {
           try {
             await request.response.close();
@@ -105,7 +138,11 @@ class QrShareServer {
       },
     );
 
-    return 'http://$ip:$actualPort/download';
+    return ShareResult(
+      qrUrl: 'http://$ip:$actualPort/download?token=$directToken',
+      webUrl: 'http://$ip:$actualPort/',
+      pin: pin,
+    );
   }
 
   Future<void> stop() async {

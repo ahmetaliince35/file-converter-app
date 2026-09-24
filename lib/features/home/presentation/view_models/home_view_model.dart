@@ -64,7 +64,6 @@ class HomeViewModel extends ChangeNotifier {
       await TempFileManager.deleteFile(file);
     }
     _resultFiles.clear();
-    await TempFileManager.clearAll();
     if (!_isDisposed) {
       notifyListeners();
     }
@@ -76,7 +75,14 @@ class HomeViewModel extends ChangeNotifier {
     bool clearPreviousSession = true,
   }) async {
     if (clearPreviousSession && _resultFiles.isNotEmpty) {
-      await clearAllResults();
+      // Sadece ekranda önceden listelenmiş eski sonuçları temizle:
+      for (final file in _resultFiles) {
+        await TempFileManager.deleteFile(file);
+      }
+      _resultFiles.clear();
+      if (!_isDisposed) {
+        notifyListeners();
+      }
     }
 
     final total = files.length;
@@ -159,8 +165,8 @@ class HomeViewModel extends ChangeNotifier {
     } catch (error) {
       return HomeOpResult.failure(mapErrorMessage(error));
     } finally {
-      // KRİTİK: İşlem bitince tüm geçici girdi kopyalarını diskten yok et!
-      if (kind != ConversionKind.image) {
+      // ZIP dosyası kaynak dosya olduğu için onu sistemden silmiyoruz:
+      if (kind != ConversionKind.image && kind != ConversionKind.zip) {
         await TempFileManager.deleteFiles(files);
       }
       _setBusy(false);

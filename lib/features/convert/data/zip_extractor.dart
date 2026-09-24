@@ -1,20 +1,28 @@
 import 'dart:io';
-import 'package:archive/archive_io.dart';
+import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../../core/files/temp_file_manager.dart';
 
 class ZipExtractor {
-  /// [inputFile] .zip arşivini ana UI thread'ini dondurmadan (compute/Isolate)
-  /// ve disk taşmalarına karşı güvenli şekilde ayıklar.
   static Future<List<File>> extract(File inputFile) async {
+    if (!await inputFile.exists()) {
+      throw FileSystemException('Kaynak zip dosyası bulunamadı', inputFile.path);
+    }
+
     final workingDir = await TempFileManager.workingDir;
+    if (!await workingDir.exists()) {
+      await workingDir.create(recursive: true);
+    }
+
     final baseName = p.basenameWithoutExtension(inputFile.path);
-    final targetDirPath = '${workingDir.path}/extracted_${baseName}_${DateTime.now().millisecondsSinceEpoch}';
+    final targetDirPath = p.join(
+      workingDir.path,
+      'extracted_${baseName}_${DateTime.now().millisecondsSinceEpoch}',
+    );
 
     try {
-      // Ağır dosya okuma ve yazma işini arka plan iş parçacığına devrediyoruz:
       final extractedPaths = await compute(_extractWorker, {
         'inputPath': inputFile.path,
         'targetDirPath': targetDirPath,
@@ -22,7 +30,6 @@ class ZipExtractor {
 
       return extractedPaths.map((path) => File(path)).toList();
     } catch (e) {
-      // İşlem başarısız olursa açılan yarım klasörü temizle
       final targetDir = Directory(targetDirPath);
       if (await targetDir.exists()) {
         try {
@@ -33,7 +40,6 @@ class ZipExtractor {
     }
   }
 
-  /// Arka planda çalışan izole ayıklama motoru
   static List<String> _extractWorker(Map<String, String> args) {
     final inputPath = args['inputPath']!;
     final targetDirPath = args['targetDirPath']!;
@@ -43,36 +49,64 @@ class ZipExtractor {
       targetDir.createSync(recursive: true);
     }
 
-    final inputStream = InputFileStream(inputPath);
-    final archive = ZipDecoder().decodeBuffer(inputStream);
-    final extractedPaths = <String>[];
+    final file = File(inputPath);
+    final bytes = file.readAsBytesSync();
 
-    final canonicalTargetDir = targetDir.resolveSymbolicLinksSync();
+    // 1. Standart decode dene, olmazsa InputStream ile dene
+    Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(bytes, verify: false);
+    } catch (_) {
+      // Alternatif parser (Bazı Windows Zip formatları için)
+      final input = InputStream(bytes);
+      archive = ZipDecoder().decodeBuffer(input, verify: false);
+    }
+
+    if (archive.isEmpty) {
+      throw Exception('Arşiv boş veya içeriği okunamadı.');
+    }
+
+    final extractedPaths = <String>[];
+    final normalizedRoot = p.normalize(p.absolute(targetDirPath));
 
     for (final entry in archive) {
-      // Zip Slip koruması: Çıkartılan dosya hedef dizinin dışına taşmamalı
-      final outPath = p.normalize(p.join(targetDirPath, entry.name));
-      if (!outPath.startsWith(canonicalTargetDir) && !outPath.startsWith(targetDirPath)) {
-        continue; // Güvenlik dışı yolu atla
+      final rawPath = entry.name.replaceAll('\\', '/');
+
+      // Mac OS çöp dosyalarını atla
+      if (rawPath.startsWith('__MACOSX') || p.basename(rawPath).startsWith('._')) {
+        continue;
+      }
+
+      final fullPath = p.normalize(p.join(normalizedRoot, rawPath));
+
+      // Zip-Slip koruması
+      if (!fullPath.startsWith(normalizedRoot)) {
+        continue;
       }
 
       if (entry.isFile) {
-        // Dosyanın yazılacağı üst klasör yoksa oluştur (Crash önleyici)
-        final parentDir = Directory(p.dirname(outPath));
-        if (!parentDir.existsSync()) {
-          parentDir.createSync(recursive: true);
+        final outFile = File(fullPath);
+        final parent = outFile.parent;
+        if (!parent.existsSync()) {
+          parent.createSync(recursive: true);
         }
 
-        final outputStream = OutputFileStream(outPath);
-        entry.writeContent(outputStream);
-        outputStream.close();
-        extractedPaths.add(outPath);
+        // Bazı arşivlerde dosya içeriği null gelebilir
+        final dynamic rawContent = entry.content;
+        if (rawContent != null) {
+          final data = rawContent as List<int>;
+          outFile.writeAsBytesSync(data, flush: true);
+          extractedPaths.add(fullPath);
+        }
       } else {
-        Directory(outPath).createSync(recursive: true);
+        final dir = Directory(fullPath);
+        if (!dir.existsSync()) {
+          dir.createSync(recursive: true);
+        }
       }
     }
 
-    inputStream.close();
+    archive.clear();
     return extractedPaths;
   }
 }

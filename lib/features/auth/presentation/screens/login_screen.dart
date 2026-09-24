@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../data/google_auth_service.dart';
 import '../../data/microsoft_auth_service.dart';
+import '../view_models/auth_view_model.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -48,6 +49,15 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _handleGuestEntry() async {
+    setState(() => _loading = true);
+    try {
+      await context.read<AuthViewModel>().continueAsGuest();
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -132,8 +142,34 @@ class _LoginScreenState extends State<LoginScreen> {
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                   ),
                 ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(child: Divider(color: colorScheme.outlineVariant)),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        'veya',
+                        style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 13),
+                      ),
+                    ),
+                    Expanded(child: Divider(color: colorScheme.outlineVariant)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: _handleGuestEntry,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  icon: const Icon(Icons.person_outline_rounded),
+                  label: const Text(
+                    'Giriş Yapmadan Misafir Olarak Devam Et',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ),
               ],
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
             ],
           ),
         ),
