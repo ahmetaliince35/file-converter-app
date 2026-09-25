@@ -1,8 +1,7 @@
 allprojects {
     repositories {
         google()
-        mavenCentral()
-    }
+        mavenCentral() }
 }
 
 val newBuildDir: Directory =

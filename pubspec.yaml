@@ -49,7 +49,7 @@ dependencies:
 
   # Ağ / HTTP İstemcisi
   http: ^1.6.0
-
+  url_launcher: ^6.3.0
 
   # 5. DURUM YÖNETİMİ (STATE MANAGEMENT)
 
@@ -60,6 +60,9 @@ dependencies:
   network_info_plus: ^5.0.1
   # 7. SharedPreferences ayarları
   shared_preferences: ^2.2.3
+  dio: ^5.7.0
+
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

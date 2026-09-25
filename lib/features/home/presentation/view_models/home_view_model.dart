@@ -13,6 +13,7 @@ import '../../../convert/data/txt_to_pdf_converter.dart';
 import '../../../convert/data/zip_creator_service.dart';
 import '../../../convert/data/zip_extractor.dart';
 import '../../../convert/domain/conversion_kind.dart';
+import '../../../transcribe/data/audio_to_text_converter.dart';
 
 class HomeOpResult {
   const HomeOpResult.success(this.message) : isSuccess = true;
@@ -75,7 +76,6 @@ class HomeViewModel extends ChangeNotifier {
     bool clearPreviousSession = true,
   }) async {
     if (clearPreviousSession && _resultFiles.isNotEmpty) {
-      // Sadece ekranda önceden listelenmiş eski sonuçları temizle:
       for (final file in _resultFiles) {
         await TempFileManager.deleteFile(file);
       }
@@ -150,6 +150,20 @@ class HomeViewModel extends ChangeNotifier {
               );
               _resultFiles.insertAll(0, await ZipExtractor.extract(file));
 
+            case ConversionKind.audio:
+              final apiKey = await AudioToTextConverter.getSavedApiKey();
+              if (apiKey == null || apiKey.isEmpty) {
+                throw Exception('Ses dönüştürmek için önce Groq API anahtarınızı tanımlamalısınız.');
+              }
+
+              _updateProgress(
+                progress: baseProgress + (stepWeight * 0.4),
+                currentFile: name,
+                message: 'Yapay zeka sesi metne dönüştürüyor (${i + 1}/$total)',
+              );
+              final converted = await AudioToTextConverter.convert(file);
+              _resultFiles.insert(0, converted);
+
             case ConversionKind.image:
               break;
           }
@@ -165,8 +179,7 @@ class HomeViewModel extends ChangeNotifier {
     } catch (error) {
       return HomeOpResult.failure(mapErrorMessage(error));
     } finally {
-      // ZIP dosyası kaynak dosya olduğu için onu sistemden silmiyoruz:
-      if (kind != ConversionKind.image && kind != ConversionKind.zip) {
+      if (kind != ConversionKind.image && kind != ConversionKind.zip && kind != ConversionKind.audio) {
         await TempFileManager.deleteFiles(files);
       }
       _setBusy(false);
@@ -314,7 +327,6 @@ class HomeViewModel extends ChangeNotifier {
       TempFileManager.deleteFile(file);
     }
     _resultFiles.clear();
-    TempFileManager.clearAll();
     super.dispose();
   }
 }
