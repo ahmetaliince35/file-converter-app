@@ -2,22 +2,22 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'package:dosya_converter/core/widgets/coversion_progress_overlay.dart';
-import 'package:dosya_converter/core/files/temp_file_manager.dart';
 import '../../../../core/theme/theme_view_model.dart';
 import '../../../../core/widgets/feedback_snack_bar.dart';
 import '../../../auth/data/google_auth_service.dart';
 import '../../../auth/data/microsoft_auth_service.dart';
 import '../../../convert/domain/conversion_kind.dart';
 import '../../../convert/presentation/screens/image_to_pdf_screen.dart';
-import '../../../pdf_tools/presentation/screens/pdf_compress_screen.dart';
-import '../../../pdf_tools/presentation/screens/pdf_merge_screen.dart';
-import '../../../pdf_tools/presentation/screens/pdf_split_screen.dart';
-import '../../../scanner/presentation/screens/doc_scanner_screen.dart';
+import '../../../ocr/presentation/snippet_ocr_screen.dart';
+import '../../../pdf_tools/presentation/pdf_studio_screen.dart';
 import '../../../share/presentation/screens/qr_share_screen.dart';
 import '../../../transcribe/data/audio_to_text_converter.dart';
 import '../../../transcribe/presentation/audio_to_text_screen.dart';
@@ -39,12 +39,24 @@ class _HomeScreenState extends State<HomeScreen> {
     showFeedbackSnackBar(
       context,
       message: result.message,
-      icon: result.isSuccess
-          ? Icons.check_circle_rounded
-          : Icons.error_outline_rounded,
-      backgroundColor:
-      result.isSuccess ? Colors.teal.shade700 : Colors.red.shade800,
+      icon: result.isSuccess ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+      backgroundColor: result.isSuccess ? Colors.teal.shade700 : Colors.red.shade800,
     );
+  }
+
+  Future<void> _shareSingleFile(File file) async {
+    HapticFeedback.lightImpact();
+    if (!await file.exists()) {
+      if (!mounted) return;
+      showFeedbackSnackBar(
+        context,
+        message: 'Paylaşılacak dosya bulunamadı.',
+        icon: Icons.error_outline_rounded,
+        backgroundColor: Colors.red.shade800,
+      );
+      return;
+    }
+    await Share.shareXFiles([XFile(file.path)]);
   }
 
   Future<void> _handleDirectQrSend() async {
@@ -183,96 +195,71 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _previewFile(File file) async {
-    HapticFeedback.lightImpact();
-    final result = await OpenFilex.open(file.path);
-    if (result.type != ResultType.done && mounted) {
-      showFeedbackSnackBar(
-        context,
-        message: 'Dosya açılamadı: ${result.message}',
-        icon: Icons.broken_image_rounded,
-        backgroundColor: Colors.red.shade700,
-      );
-    }
-  }
-
-  Future<void> _backupSingleFileToDrive(File file) async {
-    final op = await _home.backupSingleToDrive(file);
-    if (!mounted) return;
-    showFeedbackSnackBar(
-      context,
-      message: op.message,
-      icon: op.isSuccess
-          ? Icons.cloud_done_rounded
-          : Icons.lock_outline_rounded,
-      backgroundColor:
-      op.isSuccess ? Colors.green.shade700 : Colors.amber.shade900,
-    );
-  }
-
-  Future<void> _handlePdfCompression() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      withData: false,
-      allowedExtensions: ['pdf'],
-    );
-
-    if (result == null || result.files.isEmpty || result.files.single.path == null) {
-      await FilePicker.platform.clearTemporaryFiles();
-      return;
-    }
-    if (!mounted) return;
-
-    final selectedPdf = File(result.files.single.path!);
-    File? compressed;
-    try {
-      compressed = await Navigator.push<File>(
-        context,
-        MaterialPageRoute(builder: (context) => PdfCompressScreen(file: selectedPdf)),
-      );
-    } finally {
-      await FilePicker.platform.clearTemporaryFiles();
-    }
-
-    if (compressed != null && mounted) {
-      _home.addResult(compressed);
-      showFeedbackSnackBar(
-        context,
-        message: 'Sıkıştırılmış PDF hazırlandı!',
-        icon: Icons.compress_rounded,
-        backgroundColor: Colors.teal.shade700,
-      );
-    }
-  }
-
   Future<void> _handleDocScanner() async {
-    final picker = ImagePicker();
-    final pickedFiles = await picker.pickMultiImage();
+    HapticFeedback.lightImpact();
 
-    if (pickedFiles.isEmpty || !mounted) {
-      return;
-    }
-
-    final imageFiles = pickedFiles.map((x) => File(x.path)).toList();
-    File? outputPdf;
     try {
-      outputPdf = await Navigator.push<File>(
-        context,
-        MaterialPageRoute(
-          builder: (context) => DocScannerScreen(initialImages: imageFiles),
+      final documentScanner = DocumentScanner(
+        options: DocumentScannerOptions(
+          documentFormat: DocumentFormat.pdf,
+          mode: ScannerMode.full,
+          pageLimit: 25,
+          isGalleryImport: true,
         ),
       );
-    } finally {
-      await TempFileManager.deleteFiles(imageFiles);
-    }
 
-    if (outputPdf != null && mounted) {
-      _home.addResult(outputPdf);
+      final DocumentScanningResult result = await documentScanner.scanDocument();
+      await documentScanner.close();
+
+      final pdfUriString = result.pdf?.uri;
+
+      if (pdfUriString != null && mounted) {
+        final uri = Uri.parse(pdfUriString);
+        final scannedFile = uri.isScheme('file') ? File.fromUri(uri) : File(pdfUriString);
+
+        if (await scannedFile.exists()) {
+          final tempDir = await getTemporaryDirectory();
+          final targetPath = p.join(
+            tempDir.path,
+            'tarama_${DateTime.now().millisecondsSinceEpoch}.pdf',
+          );
+          final finalPdf = await scannedFile.copy(targetPath);
+
+          _home.addResult(finalPdf);
+          showFeedbackSnackBar(
+            context,
+            message: 'Taranmış A4 PDF başarıyla oluşturuldu!',
+            icon: Icons.document_scanner_rounded,
+            backgroundColor: Colors.teal.shade700,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[DOC_SCANNER_HATA] $e');
+      if (!mounted) return;
       showFeedbackSnackBar(
         context,
-        message: 'Taranmış A4 PDF başarıyla oluşturuldu!',
-        icon: Icons.document_scanner_rounded,
-        backgroundColor: Colors.deepPurple.shade600,
+        message: 'Tarama iptal edildi veya bir hata oluştu.',
+        icon: Icons.info_outline_rounded,
+        backgroundColor: Colors.amber.shade900,
+      );
+    }
+  }
+
+  Future<void> _handleSnippetOcr() async {
+    HapticFeedback.lightImpact();
+    final File? txtResult = await Navigator.push<File>(
+      context,
+      MaterialPageRoute(builder: (context) => const SnippetOcrScreen()),
+    );
+
+    if (txtResult != null && mounted) {
+      _home.addResult(txtResult);
+      showFeedbackSnackBar(
+        context,
+        message: 'Kırpılan metin TXT olarak kaydedildi!',
+        icon: Icons.text_snippet_rounded,
+        backgroundColor: Colors.teal.shade700,
       );
     }
   }
@@ -321,17 +308,38 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _previewFile(File file) async {
+    HapticFeedback.lightImpact();
+    final result = await OpenFilex.open(file.path);
+    if (result.type != ResultType.done && mounted) {
+      showFeedbackSnackBar(
+        context,
+        message: 'Dosya açılamadı: ${result.message}',
+        icon: Icons.broken_image_rounded,
+        backgroundColor: Colors.red.shade700,
+      );
+    }
+  }
+
+  Future<void> _backupSingleFileToDrive(File file) async {
+    final op = await _home.backupSingleToDrive(file);
+    if (!mounted) return;
+    showFeedbackSnackBar(
+      context,
+      message: op.message,
+      icon: op.isSuccess ? Icons.cloud_done_rounded : Icons.lock_outline_rounded,
+      backgroundColor: op.isSuccess ? Colors.green.shade700 : Colors.amber.shade900,
+    );
+  }
+
   Future<void> _backupToGoogleDrive() async {
     final op = await _home.backupAllToDrive();
     if (!mounted) return;
     showFeedbackSnackBar(
       context,
       message: op.message,
-      icon: op.isSuccess
-          ? Icons.cloud_done_rounded
-          : Icons.lock_outline_rounded,
-      backgroundColor:
-      op.isSuccess ? Colors.teal.shade700 : Colors.amber.shade900,
+      icon: op.isSuccess ? Icons.cloud_done_rounded : Icons.lock_outline_rounded,
+      backgroundColor: op.isSuccess ? Colors.teal.shade700 : Colors.amber.shade900,
     );
   }
 
@@ -352,7 +360,6 @@ class _HomeScreenState extends State<HomeScreen> {
           CustomScrollView(
             physics: const BouncingScrollPhysics(),
             slivers: [
-              // Modern, temiz ve göz yormayan App Bar
               SliverAppBar(
                 floating: true,
                 pinned: true,
@@ -360,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 scrolledUnderElevation: 1,
                 backgroundColor: theme.scaffoldBackgroundColor,
                 title: Text(
-                  'Dosya Dönüştürücü',
+                  'Dosya Stüdyosu',
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
@@ -371,9 +378,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     builder: (context, themeViewModel, _) => IconButton(
                       tooltip: themeViewModel.isDark ? 'Açık Tema' : 'Koyu Tema',
                       icon: Icon(
-                        themeViewModel.isDark
-                            ? Icons.light_mode_rounded
-                            : Icons.dark_mode_rounded,
+                        themeViewModel.isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
                         size: 20,
                       ),
                       onPressed: themeViewModel.toggle,
@@ -382,9 +387,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   PopupMenuButton<String>(
                     tooltip: 'Seçenekler',
                     icon: const Icon(Icons.more_vert_rounded),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     onSelected: (value) {
                       if (value == 'key') {
                         showApiKeyDialog(context);
@@ -399,7 +402,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             Icon(Icons.key_rounded, size: 20),
                             SizedBox(width: 12),
-                            Text('Groq API Anahtarı'),
+                            Text('Deepgram API Anahtarı'),
                           ],
                         ),
                       ),
@@ -420,223 +423,242 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
 
-              // Hesap Durumu
+              // Bulut / Hesap Durum Şeridi
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                   child: _buildAccountStatusHeader(context, googleAuth, msAuth),
                 ),
               ),
 
-              // 1. BÖLÜM: Hızlı Araçlar (Dengeli 3'lü Yatay veya Şık 2x2)
+              // 1. BÖLÜM: Ana Hızlı Araçlar (İkili Hero Düzen)
               SliverToBoxAdapter(
-                child: _buildSectionHeader(
-                  context,
-                  title: 'Hızlı İşlemler',
-                  icon: Icons.bolt_rounded,
-                  color: Colors.amber.shade700,
-                ),
-              ),
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 0.95,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _buildHeroActionCard(
+                          context,
+                          title: 'Ses ➔ Metin',
+                          subtitle: 'Nova-2 AI Transkripsiyon',
+                          icon: Icons.graphic_eq_rounded,
+                          color: Colors.deepOrangeAccent,
+                          onTap: _handleAudioToText,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildHeroActionCard(
+                          context,
+                          title: 'PC Paylaş',
+                          subtitle: 'Wi-Fi / QR Kod Aktarım',
+                          icon: Icons.qr_code_2_rounded,
+                          color: Colors.teal,
+                          onTap: _handleDirectQrSend,
+                        ),
+                      ),
+                    ],
                   ),
-                  delegate: SliverChildListDelegate([
-                    _buildModernQuickAction(
-                      context,
-                      title: 'PC\'ye Paylaş',
-                      subtitle: 'Wi-Fi / QR',
-                      icon: Icons.qr_code_2_rounded,
-                      color: Colors.teal,
-                      onTap: _handleDirectQrSend,
-                    ),
-                    _buildModernQuickAction(
-                      context,
-                      title: 'Belge Tara',
-                      subtitle: 'Kamera ➔ PDF',
-                      icon: Icons.document_scanner_rounded,
-                      color: Colors.deepPurple,
-                      onTap: _handleDocScanner,
-                    ),
-                    _buildModernQuickAction(
-                      context,
-                      title: 'Ses ➔ Metin',
-                      subtitle: 'Whisper AI',
-                      icon: Icons.record_voice_over_rounded,
-                      color: Colors.deepOrangeAccent,
-                      onTap: _handleAudioToText,
-                    ),
-                  ]),
                 ),
               ),
 
-              // 2. BÖLÜM: Office Dönüştürücüler
+              // 2. BÖLÜM: Akıllı Tarama & OCR Hub'ı (Belge Tara + Alan Seçmeli Metin Çıkar)
               SliverToBoxAdapter(
-                child: _buildSectionHeader(
-                  context,
-                  title: 'Office Belgeleri ➔ PDF',
-                  subtitle: 'Word, Excel ve PowerPoint dosyalarını PDF yapın',
-                  icon: Icons.article_rounded,
-                  color: const Color(0xFF185ABD),
-                ),
+                child: _buildSectionLabel('Akıllı Tarama & Metin Çıkarma (OCR)', Icons.document_scanner_rounded, Colors.deepPurple),
               ),
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 0.95,
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildGroupedCard(
+                    colorScheme: colorScheme,
+                    child: Row(
+                      children: [
+                        // Kamera ile Sayfayı PDF Yap
+                        Expanded(
+                          child: _buildSubToolItem(
+                            title: 'Belge Tara',
+                            subtitle: 'Kamera ➔ A4 PDF yap',
+                            icon: Icons.document_scanner_rounded,
+                            iconColor: Colors.deepPurple,
+                            onTap: _handleDocScanner,
+                          ),
+                        ),
+                        Container(width: 1, height: 48, color: colorScheme.outlineVariant.withValues(alpha: 0.2)),
+                        // Görselden Alan Kırparak Metin Al
+                        Expanded(
+                          child: _buildSubToolItem(
+                            title: 'Metin Çıkar (OCR)',
+                            subtitle: 'Kutudan yazı kopyala',
+                            icon: Icons.crop_free_rounded,
+                            iconColor: Colors.teal.shade700,
+                            onTap: _handleSnippetOcr,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  delegate: SliverChildListDelegate([
-                    _buildOfficeCard(
-                      context,
-                      title: 'Word',
-                      extension: '.docx',
-                      icon: Icons.description_rounded,
-                      color: const Color(0xFF185ABD),
-                      onTap: () => _processCategory(
-                        extensions: ['docx', 'doc'],
-                        kind: ConversionKind.office,
-                      ),
-                    ),
-                    _buildOfficeCard(
-                      context,
-                      title: 'Excel',
-                      extension: '.xlsx',
-                      icon: Icons.table_chart_rounded,
-                      color: const Color(0xFF107C41),
-                      onTap: () => _processCategory(
-                        extensions: ['xlsx', 'xls'],
-                        kind: ConversionKind.office,
-                      ),
-                    ),
-                    _buildOfficeCard(
-                      context,
-                      title: 'PowerPoint',
-                      extension: '.pptx',
-                      icon: Icons.slideshow_rounded,
-                      color: const Color(0xFFC43E1C),
-                      onTap: () => _processCategory(
-                        extensions: ['pptx', 'ppt'],
-                        kind: ConversionKind.office,
-                      ),
-                    ),
-                  ]),
                 ),
               ),
 
-              // 3. BÖLÜM: PDF ve Arşiv Araçları
+              // 3. BÖLÜM: PDF Araçları (Birleştir & Ayıkla)
               SliverToBoxAdapter(
-                child: _buildSectionHeader(
-                  context,
-                  title: 'PDF & Arşiv Araçları',
-                  icon: Icons.auto_awesome_mosaic_rounded,
-                  color: Colors.purple.shade600,
-                ),
+                child: _buildSectionLabel('PDF & Belge Araçları', Icons.picture_as_pdf_rounded, Colors.purple),
               ),
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 1.6,
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildGroupedCard(
+                    colorScheme: colorScheme,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _buildSubToolItem(
+                            title: 'PDF Düzenleyici',
+                            subtitle: 'Birleştir & Sayfa Ayıkla',
+                            icon: Icons.auto_awesome_motion_rounded,
+                            iconColor: Colors.deepOrange,
+                            onTap: () async {
+                              final File? result = await Navigator.push<File>(
+                                context,
+                                MaterialPageRoute(builder: (context) => const PdfStudioScreen()),
+                              );
+                              if (result != null && mounted) _home.addResult(result);
+                            },
+                          ),
+                        ),
+                        Container(width: 1, height: 48, color: colorScheme.outlineVariant.withValues(alpha: 0.2)),
+                        Expanded(
+                          child: _buildSubToolItem(
+                            title: 'Resim ➔ PDF',
+                            subtitle: 'Görselleri PDF\'e çevir',
+                            icon: Icons.collections_rounded,
+                            iconColor: Colors.purple,
+                            onTap: () async {
+                              final File? singlePdf = await Navigator.push<File>(
+                                context,
+                                MaterialPageRoute(builder: (context) => const ImageToPdfScreen()),
+                              );
+                              if (singlePdf == null || !mounted) return;
+                              _home.addResult(singlePdf);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  delegate: SliverChildListDelegate([
-                    _buildToolTile(
-                      context,
-                      title: 'Resim ➔ PDF',
-                      subtitle: 'JPG / PNG birleştir',
-                      icon: Icons.collections_rounded,
-                      color: Colors.purple.shade600,
-                      onTap: () async {
-                        final File? singlePdf = await Navigator.push<File>(
-                          context,
-                          MaterialPageRoute(builder: (context) => const ImageToPdfScreen()),
-                        );
-                        if (singlePdf == null || !mounted) return;
-                        _home.addResult(singlePdf);
-                      },
-                    ),
-                    _buildToolTile(
-                      context,
-                      title: 'PDF Birleştir',
-                      subtitle: 'Tek dosya yap',
-                      icon: Icons.merge_type_rounded,
-                      color: Colors.deepOrange.shade600,
-                      onTap: () async {
-                        final File? merged = await Navigator.push<File>(
-                          context,
-                          MaterialPageRoute(builder: (context) => const PdfMergeScreen()),
-                        );
-                        if (merged != null && mounted) _home.addResult(merged);
-                      },
-                    ),
-                    _buildToolTile(
-                      context,
-                      title: 'Sayfa Ayıkla',
-                      subtitle: 'PDF sayfalarını böl',
-                      icon: Icons.call_split_rounded,
-                      color: Colors.indigo.shade600,
-                      onTap: () async {
-                        final File? extracted = await Navigator.push<File>(
-                          context,
-                          MaterialPageRoute(builder: (context) => const PdfSplitScreen()),
-                        );
-                        if (extracted != null && mounted) _home.addResult(extracted);
-                      },
-                    ),
-                    _buildToolTile(
-                      context,
-                      title: 'PDF Küçült',
-                      subtitle: 'Boyut sıkıştırma',
-                      icon: Icons.compress_rounded,
-                      color: Colors.blueGrey.shade700,
-                      onTap: _handlePdfCompression,
-                    ),
-                    _buildToolTile(
-                      context,
-                      title: 'ZIP Oluştur',
-                      subtitle: 'Dosyaları paketle',
-                      icon: Icons.archive_rounded,
-                      color: Colors.brown.shade600,
-                      onTap: _handleCreateZip,
-                    ),
-                    _buildToolTile(
-                      context,
-                      title: 'ZIP Ayıkla',
-                      subtitle: 'Dışarı çıkart',
-                      icon: Icons.folder_zip_rounded,
-                      color: Colors.amber.shade800,
-                      onTap: () => _processCategory(
-                        extensions: ['zip'],
-                        kind: ConversionKind.zip,
-                      ),
-                    ),
-                  ]),
                 ),
               ),
 
-              // 4. BÖLÜM: Hazır Dosyalar Listesi
+              // 4. BÖLÜM: Office Dönüştürücü Hub'ı
+              SliverToBoxAdapter(
+                child: _buildSectionLabel('Office Belgeleri ➔ PDF', Icons.description_rounded, const Color(0xFF185ABD)),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildGroupedCard(
+                    colorScheme: colorScheme,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildOfficePill(
+                              title: 'Word',
+                              ext: '.docx / .doc',
+                              icon: Icons.article_rounded,
+                              color: const Color(0xFF185ABD),
+                              onTap: () => _processCategory(
+                                extensions: ['docx', 'doc'],
+                                kind: ConversionKind.office,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildOfficePill(
+                              title: 'Excel',
+                              ext: '.xlsx / .xls',
+                              icon: Icons.table_chart_rounded,
+                              color: const Color(0xFF107C41),
+                              onTap: () => _processCategory(
+                                extensions: ['xlsx', 'xls'],
+                                kind: ConversionKind.office,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildOfficePill(
+                              title: 'PowerPoint',
+                              ext: '.pptx / .ppt',
+                              icon: Icons.slideshow_rounded,
+                              color: const Color(0xFFC43E1C),
+                              onTap: () => _processCategory(
+                                extensions: ['pptx', 'ppt'],
+                                kind: ConversionKind.office,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // 5. BÖLÜM: Arşiv (ZIP) Araçları
+              SliverToBoxAdapter(
+                child: _buildSectionLabel('Arşivleme (ZIP)', Icons.folder_zip_rounded, Colors.brown),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildGroupedCard(
+                    colorScheme: colorScheme,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _buildSubToolItem(
+                            title: 'ZIP Oluştur',
+                            subtitle: 'Dosyaları sıkıştır',
+                            icon: Icons.archive_rounded,
+                            iconColor: Colors.brown.shade700,
+                            onTap: _handleCreateZip,
+                          ),
+                        ),
+                        Container(width: 1, height: 48, color: colorScheme.outlineVariant.withValues(alpha: 0.2)),
+                        Expanded(
+                          child: _buildSubToolItem(
+                            title: 'ZIP Ayıkla',
+                            subtitle: 'Klasöre çıkart',
+                            icon: Icons.unarchive_rounded,
+                            iconColor: Colors.amber.shade800,
+                            onTap: () => _processCategory(
+                              extensions: ['zip'],
+                              kind: ConversionKind.zip,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              // 6. BÖLÜM: Hazır Dosyalar Listesi
               if (resultFiles.isNotEmpty) ...[
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 28, 16, 10),
+                    padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
                     child: Row(
                       children: [
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
                             color: colorScheme.primaryContainer,
-                            borderRadius: BorderRadius.circular(20),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
                             'Hazır Dosyalar (${resultFiles.length})',
@@ -675,17 +697,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 50),
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 40),
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate(
-                          (context, index) =>
-                          _buildResultTile(resultFiles[index], colorScheme, theme),
+                          (context, index) => _buildResultTile(resultFiles[index], colorScheme, theme),
                       childCount: resultFiles.length,
                     ),
                   ),
                 ),
               ] else ...[
-                const SliverToBoxAdapter(child: SizedBox(height: 60)),
+                const SliverToBoxAdapter(child: SizedBox(height: 40)),
               ],
             ],
           ),
@@ -700,132 +721,37 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildAccountStatusHeader(
-      BuildContext context,
-      GoogleAuthService googleAuth,
-      MicrosoftAuthService msAuth,
-      ) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final isMs = msAuth.isSignedIn;
-    final isGoogle = googleAuth.isSignedIn;
+  // --- YARDIMCI BİLEŞENLER ---
 
-    final title = isMs
-        ? 'Microsoft Hesabı Bağlı'
-        : (isGoogle
-        ? (googleAuth.currentUser?.email ?? 'Google Hesabı Bağlı')
-        : 'Misafir Modu');
+  Widget _buildSectionLabel(String title, IconData icon, Color color) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, letterSpacing: -0.2),
+          ),
+        ],
+      ),
+    );
+  }
 
-    final color = isMs
-        ? const Color(0xFF0078D4)
-        : (isGoogle ? Colors.green.shade700 : colorScheme.outline);
-
+  Widget _buildGroupedCard({required ColorScheme colorScheme, required Widget child}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
       ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 15,
-            backgroundColor: color.withValues(alpha: 0.12),
-            child: Icon(
-              isMs
-                  ? Icons.window_rounded
-                  : (isGoogle ? Icons.account_circle_rounded : Icons.cloud_off_rounded),
-              size: 16,
-              color: color,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  isMs || isGoogle
-                      ? 'Bulut yedekleme hazır'
-                      : 'Yerel modda çalışıyor',
-                  style: TextStyle(fontSize: 11, color: colorScheme.outline),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              'Max 10 Dosya',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                color: colorScheme.outline,
-              ),
-            ),
-          ),
-        ],
-      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
     );
   }
 
-  Widget _buildSectionHeader(
-      BuildContext context, {
-        required String title,
-        String? subtitle,
-        required IconData icon,
-        required Color color,
-      }) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 18, color: color),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.2,
-                ),
-              ),
-            ],
-          ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 2),
-            Padding(
-              padding: const EdgeInsets.only(left: 26),
-              child: Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: theme.colorScheme.outline,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildModernQuickAction(
+  Widget _buildHeroActionCard(
       BuildContext context, {
         required String title,
         required String subtitle,
@@ -833,8 +759,7 @@ class _HomeScreenState extends State<HomeScreen> {
         required Color color,
         required VoidCallback onTap,
       }) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
+    final colorScheme = Theme.of(context).colorScheme;
 
     return Material(
       color: colorScheme.surfaceContainerLow,
@@ -844,156 +769,40 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: context.watch<HomeViewModel>().busy ? null : onTap,
         splashColor: color.withValues(alpha: 0.1),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: colorScheme.outlineVariant.withValues(alpha: 0.3),
-            ),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color, size: 22),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 10, color: colorScheme.outline),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOfficeCard(
-      BuildContext context, {
-        required String title,
-        required String extension,
-        required IconData icon,
-        required Color color,
-        required VoidCallback onTap,
-      }) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return Material(
-      color: colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(16),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: context.watch<HomeViewModel>().busy ? null : onTap,
-        splashColor: color.withValues(alpha: 0.1),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: colorScheme.outlineVariant.withValues(alpha: 0.3),
-            ),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color, size: 22),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                extension,
-                style: TextStyle(fontSize: 10, color: colorScheme.outline),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildToolTile(
-      BuildContext context, {
-        required String title,
-        required String subtitle,
-        required IconData icon,
-        required Color color,
-        required VoidCallback onTap,
-      }) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return Material(
-      color: colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(14),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: context.watch<HomeViewModel>().busy ? null : onTap,
-        splashColor: color.withValues(alpha: 0.1),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: colorScheme.outlineVariant.withValues(alpha: 0.3),
-            ),
+            border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
           ),
           child: Row(
             children: [
               Container(
-                width: 36,
-                height: 36,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: color, size: 18),
+                child: Icon(icon, color: color, size: 24),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 10, color: colorScheme.outline),
+                      style: TextStyle(fontSize: 10.5, color: colorScheme.outline),
                     ),
                   ],
                 ),
@@ -1001,6 +810,128 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSubToolItem({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color iconColor,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: context.watch<HomeViewModel>().busy ? null : onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                  ),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOfficePill({
+    required String title,
+    required String ext,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: context.watch<HomeViewModel>().busy ? null : onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.2)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 24),
+            const SizedBox(height: 6),
+            Text(
+              title,
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: color),
+            ),
+            Text(
+              ext,
+              style: TextStyle(fontSize: 9.5, color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAccountStatusHeader(
+      BuildContext context,
+      GoogleAuthService googleAuth,
+      MicrosoftAuthService msAuth,
+      ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isMs = msAuth.isSignedIn;
+    final isGoogle = googleAuth.isSignedIn;
+
+    final title = isMs
+        ? 'Microsoft Hesabı Aktif'
+        : (isGoogle ? (googleAuth.currentUser?.email ?? 'Google Hesabı Aktif') : 'Misafir Modu');
+
+    final color = isMs ? const Color(0xFF0078D4) : (isGoogle ? Colors.green.shade700 : colorScheme.outline);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 12,
+            backgroundColor: color.withValues(alpha: 0.15),
+            child: Icon(
+              isMs ? Icons.window_rounded : (isGoogle ? Icons.account_circle_rounded : Icons.cloud_off_rounded),
+              size: 14,
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Text(
+            isMs || isGoogle ? 'Bulut Senkronize' : 'Yerel Hafıza',
+            style: TextStyle(fontSize: 10.5, color: colorScheme.outline, fontWeight: FontWeight.w500),
+          ),
+        ],
       ),
     );
   }
@@ -1040,17 +971,13 @@ class _HomeScreenState extends State<HomeScreen> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
           onTap: () => _previewFile(file),
           leading: Container(
-            width: 38,
-            height: 38,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
               color: badgeColor,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(
-              fileIcon,
-              color: iconColor,
-              size: 20,
-            ),
+            child: Icon(fileIcon, color: iconColor, size: 18),
           ),
           title: Text(
             fileName,
@@ -1059,13 +986,21 @@ class _HomeScreenState extends State<HomeScreen> {
             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
           ),
           subtitle: Text(
-            '$fileSizeKB KB • Dokun ve Gör',
+            '$fileSizeKB KB • Önizlemek için dokunun',
             style: TextStyle(fontSize: 11, color: colorScheme.outline),
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Paylaş',
+                icon: const Icon(Icons.share_rounded, size: 18),
+                color: Colors.blue.shade600,
+                onPressed: () => _shareSingleFile(file),
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
                 tooltip: 'QR Paylaş',
                 icon: const Icon(Icons.qr_code_rounded, size: 18),
                 color: Colors.teal.shade700,
@@ -1077,14 +1012,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
               ),
               IconButton(
+                visualDensity: VisualDensity.compact,
                 tooltip: 'Drive\'a Yükle',
                 icon: const Icon(Icons.cloud_upload_outlined, size: 18),
-                color: Colors.blue.shade700,
-                onPressed: context.watch<HomeViewModel>().busy
-                    ? null
-                    : () => _backupSingleFileToDrive(file),
+                color: Colors.indigo.shade700,
+                onPressed: context.watch<HomeViewModel>().busy ? null : () => _backupSingleFileToDrive(file),
               ),
               IconButton(
+                visualDensity: VisualDensity.compact,
                 tooltip: 'Sil',
                 icon: const Icon(Icons.delete_outline_rounded, size: 18),
                 color: Colors.red.shade400,

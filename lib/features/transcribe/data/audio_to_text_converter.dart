@@ -1,144 +1,113 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../../core/files/temp_file_manager.dart';
-
 class AudioToTextConverter {
-  static const String keyPrefKey = 'groq_api_key';
+  static const String keyPrefKey = 'deepgram_api_key';
 
+  /// Kayıtlı Deepgram API anahtarını SharedPreferences üzerinden getirir
   static Future<String?> getSavedApiKey() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(keyPrefKey);
   }
 
+  /// Deepgram API anahtarını yerel depolamaya kaydeder
   static Future<void> saveApiKey(String key) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(keyPrefKey, key.trim());
   }
 
-  /// Xiaomi'nin 'isom' / 'mp42' video konteyner imzasını saf ses 'M4A ' imzasına çevirir
-  static Uint8List _patchM4aHeader(Uint8List originalBytes) {
-    if (originalBytes.length < 32) return originalBytes;
-
-    // Kopya bayt dizisi oluştur
-    final patched = Uint8List.fromList(originalBytes);
-
-    // ISO Base Media formatında 4..8 arası 'ftyp' olmalıdır
-    // 0x66, 0x74, 0x79, 0x70 -> 'ftyp'
-    if (patched[4] == 0x66 &&
-        patched[5] == 0x74 &&
-        patched[6] == 0x79 &&
-        patched[7] == 0x70) {
-      // 8..12 arasındaki major brand'i zorla 'M4A ' yap (0x4D, 0x34, 0x41, 0x20)
-      patched[8] = 0x4D;  // M
-      patched[9] = 0x34;  // 4
-      patched[10] = 0x41; // A
-      patched[11] = 0x20; // boşluk
-
-      // 12..16 minör versiyonu sıfırla
-      patched[12] = 0x00;
-      patched[13] = 0x00;
-      patched[14] = 0x02;
-      patched[15] = 0x00;
-
-      // 16..20 uyumlu brand listesinin ilkini de 'M4A ' yap
-      if (patched.length >= 20) {
-        patched[16] = 0x4D;
-        patched[17] = 0x34;
-        patched[18] = 0x41;
-        patched[19] = 0x20;
-      }
-      debugPrint('[GROQ_DEBUG] M4A başlığı saf ses (M4A ) olarak yamalandı.');
-    }
-    return patched;
-  }
-
-  static Future<File> convert(File audioFile, {String language = 'tr'}) async {
+  /// Sesi metne çevirip doğrudan ham metin (String) olarak döner
+  /// Düzenlenebilir not defteri / çalışma alanı için bu kullanılır.
+  static Future<String> transcribe(File audioFile, {String language = 'tr'}) async {
     final apiKey = await getSavedApiKey();
     if (apiKey == null || apiKey.isEmpty) {
-      throw Exception('Lütfen önce Groq API anahtarınızı girin.');
+      throw Exception('Lütfen önce Deepgram API anahtarınızı girin.');
     }
 
-    final rawBytes = await audioFile.readAsBytes();
-    if (rawBytes.isEmpty) {
-      throw Exception('Dosya içeriği boş!');
+    if (!await audioFile.exists() || await audioFile.length() == 0) {
+      throw Exception('Dosya okunamadı veya içeriği boş!');
     }
 
-    final cleanPath = audioFile.path.replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
-    final ext = p.extension(cleanPath).toLowerCase().replaceAll('.', '').trim();
+    final fileLength = await audioFile.length();
 
-    // Eğer dosya m4a ise veya varsayılan uzantı yoksa başlığı yamala
-    Uint8List sendBytes = rawBytes;
-    String uploadExt = ext.isEmpty ? 'm4a' : ext;
+    final queryParams = <String, String>{
+      'model': 'nova-2',
+      'smart_format': 'true',
+      'punctuate': 'true',
+    };
 
-    if (uploadExt == 'm4a') {
-      sendBytes = _patchM4aHeader(rawBytes);
-    } else if (uploadExt == 'opus') {
-      uploadExt = 'ogg';
-    }
-
-    final boundary = '----DartBoundary${DateTime.now().millisecondsSinceEpoch}';
-    final uri = Uri.parse('https://api.groq.com/openai/v1/audio/transcriptions');
-
-    final client = HttpClient();
-    final request = await client.postUrl(uri);
-
-    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $apiKey');
-    request.headers.set(
-      HttpHeaders.contentTypeHeader,
-      'multipart/form-data; boundary=$boundary',
-    );
-
-    // 1. Model
-    request.write('--$boundary\r\n');
-    request.write('Content-Disposition: form-data; name="model"\r\n\r\n');
-    request.write('whisper-large-v3\r\n');
-
-    // 2. Response format
-    request.write('--$boundary\r\n');
-    request.write('Content-Disposition: form-data; name="response_format"\r\n\r\n');
-    request.write('json\r\n');
-
-    // 3. Language
     if (language.isNotEmpty && language != 'auto') {
-      request.write('--$boundary\r\n');
-      request.write('Content-Disposition: form-data; name="language"\r\n\r\n');
-      request.write('$language\r\n');
+      queryParams['language'] = language;
+    } else {
+      queryParams['detect_language'] = 'true';
     }
 
-    // 4. File: Doğrudan saf ses formatı 'audio/mp4' ve 'audio.m4a' olarak gönderilir
-    request.write('--$boundary\r\n');
-    request.write('Content-Disposition: form-data; name="file"; filename="audio.$uploadExt"\r\n');
-    request.write('Content-Type: audio/mp4\r\n\r\n');
-    request.add(sendBytes);
-    request.write('\r\n');
+    final uri = Uri.https('api.deepgram.com', '/v1/listen', queryParams);
+    debugPrint('[DEEPGRAM_DEBUG] Stream ile gönderiliyor: ${audioFile.path} ($fileLength bayt)');
 
-    request.write('--$boundary--\r\n');
+    final request = http.StreamedRequest('POST', uri);
+    request.headers.addAll({
+      'Authorization': 'Token $apiKey',
+      'Content-Type': 'audio/*',
+      'Content-Length': fileLength.toString(),
+    });
 
-    final response = await request.close();
-    final responseBody = await response.transform(utf8.decoder).join();
+    // Dosyayı sink'e pipe ediyoruz (Akışın tamamlanmasını garanti eder)
+    audioFile.openRead().pipe(request.sink);
 
-    debugPrint('[GROQ_DEBUG] Durum Kodu: ${response.statusCode}');
-    debugPrint('[GROQ_DEBUG] Yanıt: $responseBody');
+    final client = http.Client();
+    http.StreamedResponse streamedResponse;
 
-    if (response.statusCode != 200) {
+    try {
+      // Büyük dosyalarda yükleme ve Deepgram analizi zaman alabileceğinden timeout süresini esnek tutuyoruz
+      streamedResponse = await client.send(request).timeout(const Duration(minutes: 5));
+
+      // Gövdeyi (body) client açıkken tamamen tüketiyoruz:
+      final responseBody = await streamedResponse.stream.bytesToString();
+      debugPrint('[DEEPGRAM_DEBUG] Durum Kodu: ${streamedResponse.statusCode}');
+
+      if (streamedResponse.statusCode != 200) {
+        debugPrint('[DEEPGRAM_DEBUG] Hata Yanıtı: $responseBody');
+        throw Exception('Deepgram API Hatası (${streamedResponse.statusCode}): $responseBody');
+      }
+
+      final data = jsonDecode(responseBody) as Map<String, dynamic>;
+      final channels = data['results']?['channels'] as List<dynamic>?;
+      String transcribedText = '';
+
+      if (channels != null && channels.isNotEmpty) {
+        final alternatives = channels[0]['alternatives'] as List<dynamic>?;
+        if (alternatives != null && alternatives.isNotEmpty) {
+          transcribedText = (alternatives[0]['transcript'] as String?)?.trim() ?? '';
+        }
+      }
+
+      if (transcribedText.isEmpty) {
+        throw Exception('Ses dosyasından herhangi bir konuşma algılanamadı.');
+      }
+
+      return transcribedText;
+    } finally {
+      // client.close() işlemi yanıt gövdesi tamamen okunduktan sonra güvenle çalışır
       client.close();
-      throw Exception('Groq API Hatası (${response.statusCode}): $responseBody');
     }
+  }
 
-    client.close();
+  /// Sesi metne çevirip doğrudan bir .txt Dosyası (File) olarak kaydeder ve döner
+  static Future<File> convert(File audioFile, {String language = 'tr'}) async {
+    final transcribedText = await transcribe(audioFile, language: language);
 
-    final data = jsonDecode(responseBody) as Map<String, dynamic>;
-    final transcribedText = (data['text'] as String?)?.trim() ?? '';
+    final tempDir = await getTemporaryDirectory();
+    final cleanOriginalPath = audioFile.path.replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
+    final baseName = p.basenameWithoutExtension(cleanOriginalPath);
 
-    final workingDir = await TempFileManager.workingDir;
-    final baseName = p.basenameWithoutExtension(cleanPath);
     final outputTxt = File(
-      p.join(workingDir.path, '${baseName}_transkript_${DateTime.now().millisecondsSinceEpoch}.txt'),
+      p.join(tempDir.path, '${baseName.isEmpty ? 'ses' : baseName}_transkript_${DateTime.now().millisecondsSinceEpoch}.txt'),
     );
 
     await outputTxt.writeAsString(
@@ -147,5 +116,64 @@ class AudioToTextConverter {
     );
 
     return outputTxt;
+  }
+
+  /// Deepgram Management API üzerinden kalan dolar miktarını ve tahmini saati sorgular
+  /// (API anahtarının "Administrator" rolüne sahip olması gerekir)
+  static Future<Map<String, dynamic>?> getRemainingBalance() async {
+    final apiKey = await getSavedApiKey();
+    if (apiKey == null || apiKey.isEmpty) return null;
+
+    try {
+      // 1. Proje ID'sini sorgula
+      final projectsUri = Uri.parse('https://api.deepgram.com/v1/projects');
+      final projRes = await http.get(
+        projectsUri,
+        headers: {'Authorization': 'Token $apiKey'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (projRes.statusCode != 200) {
+        debugPrint('[DEEPGRAM_BALANCE] Proje sorgusu başarısız (Kod: ${projRes.statusCode})');
+        return null;
+      }
+
+      final projData = jsonDecode(projRes.body) as Map<String, dynamic>;
+      final projects = projData['projects'] as List<dynamic>?;
+      if (projects == null || projects.isEmpty) return null;
+
+      final projectId = projects[0]['project_id'];
+
+      // 2. Kalan bakiyeyi sorgula
+      final balancesUri = Uri.parse('https://api.deepgram.com/v1/projects/$projectId/balances');
+      final balRes = await http.get(
+        balancesUri,
+        headers: {'Authorization': 'Token $apiKey'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (balRes.statusCode != 200) {
+        debugPrint('[DEEPGRAM_BALANCE] Bakiye sorgusu başarısız (Kod: ${balRes.statusCode})');
+        return null;
+      }
+
+      final balData = jsonDecode(balRes.body) as Map<String, dynamic>;
+      final balances = balData['balances'] as List<dynamic>?;
+      if (balances == null || balances.isEmpty) return null;
+
+      double totalAmount = 0.0;
+      for (final b in balances) {
+        totalAmount += (b['amount'] as num?)?.toDouble() ?? 0.0;
+      }
+
+      // Nova-2 saatlik maliyet: ~$0.258
+      final estimatedHours = (totalAmount / 0.258).floor();
+
+      return {
+        'amount': totalAmount,
+        'hours': estimatedHours,
+      };
+    } catch (e) {
+      debugPrint('[DEEPGRAM_BALANCE_ERROR] $e');
+      return null;
+    }
   }
 }

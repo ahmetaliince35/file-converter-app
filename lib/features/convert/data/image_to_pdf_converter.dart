@@ -6,68 +6,94 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../../../../core/files/temp_file_manager.dart';
 
-typedef ConverterProgressCallback = void Function(int current, int total);
+enum DocumentFilterMode {
+  none,
+  enhanceContrast,
+  blackAndWhite,
+}
 
 class ImageToPdfConverter {
+  /// HomeViewModel tarafından doğrudan toplu dönüştürme için çağrılan standart metot
   static Future<File> convert(
       List<File> imageFiles, {
-        ConverterProgressCallback? onProgress,
+        Function(int current, int total)? onProgress,
       }) async {
-    if (imageFiles.isEmpty) {
-      throw Exception('Dönüştürülecek fotoğraf bulunamadı.');
-    }
+    return createScannedPdf(
+      imageFiles: imageFiles,
+      filter: DocumentFilterMode.enhanceContrast,
+      quality: 75,
+      onProgress: onProgress,
+    );
+  }
 
+  /// Fotoğrafları hem boyut olarak optimize eder hem de A4 PDF yapar
+  static Future<File> createScannedPdf({
+    required List<File> imageFiles,
+    DocumentFilterMode filter = DocumentFilterMode.enhanceContrast,
+    int quality = 70,
+    Function(int current, int total)? onProgress,
+  }) async {
     final pdf = pw.Document();
-    final total = imageFiles.length;
 
-    try {
-      for (var i = 0; i < total; i++) {
-        final file = imageFiles[i];
-        onProgress?.call(i + 1, total);
+    for (int i = 0; i < imageFiles.length; i++) {
+      onProgress?.call(i + 1, imageFiles.length);
 
-        if (!await file.exists()) continue;
+      final rawBytes = await imageFiles[i].readAsBytes();
 
-        final rawBytes = await file.readAsBytes();
-        final optimizedBytes = await compute(_downscaleWorker, rawBytes);
+      final processedBytes = await compute(_optimizeAndResizeWorker, {
+        'bytes': rawBytes,
+        'quality': quality,
+        'filter': filter,
+      });
 
-        final imageProvider = pw.MemoryImage(optimizedBytes);
-        pdf.addPage(
-          pw.Page(
-            pageFormat: pw_pdf.PdfPageFormat.a4,
-            margin: const pw.EdgeInsets.all(10),
-            build: (context) {
-              return pw.Center(
-                child: pw.Image(imageProvider, fit: pw.BoxFit.contain),
-              );
-            },
-          ),
-        );
-      }
-
-      final workingDir = await TempFileManager.workingDir;
-      final outPath = '${workingDir.path}/Resimler_${DateTime.now().millisecondsSinceEpoch}.pdf';
-      final outFile = File(outPath);
-      await outFile.writeAsBytes(await pdf.save());
-
-      return outFile;
-    } finally {
-      await TempFileManager.deleteFiles(imageFiles);
+      final imageProvider = pw.MemoryImage(processedBytes);
+      pdf.addPage(
+        pw.Page(
+          pageFormat: pw_pdf.PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(10),
+          build: (context) {
+            return pw.Center(
+              child: pw.Image(imageProvider, fit: pw.BoxFit.contain),
+            );
+          },
+        ),
+      );
     }
+
+    final workingDir = await TempFileManager.workingDir;
+    final outPath = '${workingDir.path}/belge_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final outFile = File(outPath);
+    await outFile.writeAsBytes(await pdf.save());
+
+    return outFile;
   }
 }
 
-Uint8List _downscaleWorker(Uint8List bytes) {
-  img.Image? decoded = img.decodeImage(bytes);
-  if (decoded == null) return bytes;
+/// Çözünürlüğü düzenleyen ve boyutu düşüren arka plan fonksiyonu
+Uint8List _optimizeAndResizeWorker(Map<String, dynamic> params) {
+  final Uint8List rawBytes = params['bytes'];
+  final int quality = params['quality'];
+  final DocumentFilterMode filter = params['filter'];
 
-  const int maxDimension = 1600;
-  if (decoded.width > maxDimension || decoded.height > maxDimension) {
-    if (decoded.width > decoded.height) {
-      decoded = img.copyResize(decoded, width: maxDimension);
+  img.Image? image = img.decodeImage(rawBytes);
+  if (image == null) return rawBytes;
+
+  const int maxDimension = 1400;
+  if (image.width > maxDimension || image.height > maxDimension) {
+    if (image.width > image.height) {
+      image = img.copyResize(image, width: maxDimension);
     } else {
-      decoded = img.copyResize(decoded, height: maxDimension);
+      image = img.copyResize(image, height: maxDimension);
     }
   }
 
-  return Uint8List.fromList(img.encodeJpg(decoded, quality: 75));
+  if (filter == DocumentFilterMode.enhanceContrast) {
+    image = img.adjustColor(image, contrast: 1.3, brightness: 1.05);
+  } else if (filter == DocumentFilterMode.blackAndWhite) {
+    image = img.grayscale(image);
+    image = img.adjustColor(image, contrast: 1.5, brightness: 1.1);
+  }
+
+  final jpgBytes = img.encodeJpg(image, quality: quality);
+  return Uint8List.fromList(jpgBytes);
 }

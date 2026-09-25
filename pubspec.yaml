@@ -60,8 +60,18 @@ dependencies:
   network_info_plus: ^5.0.1
   # 7. SharedPreferences ayarları
   shared_preferences: ^2.2.3
-  dio: ^5.7.0
 
+  #8. Transkrip Araçları
+  dio: ^5.7.0
+  audio_decoder: ^0.8.1
+  audioplayers: ^6.0.0
+
+  #9. CamScanner Araçları
+  google_mlkit_document_scanner: ^0.3.0
+
+  #10. Text Recognizer Araçları
+  google_mlkit_text_recognition: ^0.14.0
+  image_cropper: ^12.2.1
 
 dev_dependencies:
   flutter_test:

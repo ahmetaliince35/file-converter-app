@@ -8,16 +8,18 @@ import '../../../../core/files/temp_file_manager.dart';
 
 enum DocumentFilterMode {
   none,
-  enhanceContrast,
-  blackAndWhite,
+  magicColor,      // CamScanner Sihirli Renk (arka planı beyazlatır, renkli yazıları parlatır)
+  blackAndWhite,   // Temiz Fotokopi / Metin Modu
+  grayscale,       // Gri Tonlama
 }
 
 class DocScannerService {
-  /// Fotoğrafları hem boyut olarak küçültür hem de A4 PDF yapar
+  /// Fotoğrafları işler, filtreler ve tek bir A4 PDF dosyasında toplar
   static Future<File> createScannedPdf({
     required List<File> imageFiles,
-    DocumentFilterMode filter = DocumentFilterMode.enhanceContrast,
-    int quality = 70, // %70 JPEG kalitesi (okunabilirlik korunur, boyut düşer)
+    required List<int> rotations, // Her görselin dönüş açısı (0, 90, 180, 270)
+    DocumentFilterMode filter = DocumentFilterMode.magicColor,
+    int quality = 75,
     Function(int current, int total)? onProgress,
   }) async {
     final pdf = pw.Document();
@@ -26,19 +28,21 @@ class DocScannerService {
       onProgress?.call(i + 1, imageFiles.length);
 
       final rawBytes = await imageFiles[i].readAsBytes();
+      final rotationAngle = (i < rotations.length) ? rotations[i] : 0;
 
-      // Arka planda çözünürlüğü A4 standardına indirip sıkıştırır
-      final processedBytes = await compute(_optimizeAndResizeWorker, {
+      // Ağır görsel işleme ana thread'i (UI) dondurmasın diye compute isolate içinde yapılır
+      final processedBytes = await compute(_processDocumentWorker, {
         'bytes': rawBytes,
         'quality': quality,
         'filter': filter,
+        'rotation': rotationAngle,
       });
 
       final imageProvider = pw.MemoryImage(processedBytes);
       pdf.addPage(
         pw.Page(
           pageFormat: pw_pdf.PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(10),
+          margin: const pw.EdgeInsets.all(12),
           build: (context) {
             return pw.Center(
               child: pw.Image(imageProvider, fit: pw.BoxFit.contain),
@@ -48,9 +52,8 @@ class DocScannerService {
       );
     }
 
-    // Dosyayı converter_cache içine yazarak depolama hijyenini koruyoruz:
     final workingDir = await TempFileManager.workingDir;
-    final outPath = '${workingDir.path}/belge_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final outPath = '${workingDir.path}/tarama_${DateTime.now().millisecondsSinceEpoch}.pdf';
     final outFile = File(outPath);
     await outFile.writeAsBytes(await pdf.save());
 
@@ -58,35 +61,70 @@ class DocScannerService {
   }
 }
 
-/// Çözünürlüğü düzenleyen ve boyutu asıl düşüren arka plan fonksiyonu
-Uint8List _optimizeAndResizeWorker(Map<String, dynamic> params) {
+/// Arka plan görsel işleme motoru
+Uint8List _processDocumentWorker(Map<String, dynamic> params) {
   final Uint8List rawBytes = params['bytes'];
   final int quality = params['quality'];
   final DocumentFilterMode filter = params['filter'];
+  final int rotation = params['rotation'] ?? 0;
 
   img.Image? image = img.decodeImage(rawBytes);
   if (image == null) return rawBytes;
 
-  // 1. BOYUTU DÜŞÜRME (DOWNSCALE):
-  // Telefon kamerasının 4000x3000 piksel devasa boyutunu A4 okunabilir sınırına (maksimum 1400px) çekiyoruz.
-  const int maxDimension = 1400;
+  // 1. Döndürme işlemi (varsa)
+  if (rotation == 90) {
+    image = img.copyRotate(image, angle: 90);
+  } else if (rotation == 180) {
+    image = img.copyRotate(image, angle: 180);
+  } else if (rotation == 270) {
+    image = img.copyRotate(image, angle: 270);
+  }
+
+  // 2. Boyutlandırma (A4 okunabilirlik standardı - max 1600px)
+  const int maxDimension = 1600;
   if (image.width > maxDimension || image.height > maxDimension) {
     if (image.width > image.height) {
-      image = img.copyResize(image, width: maxDimension);
+      image = img.copyResize(image, width: maxDimension, interpolation: img.Interpolation.linear);
     } else {
-      image = img.copyResize(image, height: maxDimension);
+      image = img.copyResize(image, height: maxDimension, interpolation: img.Interpolation.linear);
     }
   }
 
-  // 2. FİLTRE (Netleştirme / Belge modu)
-  if (filter == DocumentFilterMode.enhanceContrast) {
-    image = img.adjustColor(image, contrast: 1.3, brightness: 1.05);
-  } else if (filter == DocumentFilterMode.blackAndWhite) {
-    image = img.grayscale(image);
-    image = img.adjustColor(image, contrast: 1.5, brightness: 1.1);
+  // 3. CamScanner Filtre Algoritmaları
+  switch (filter) {
+    case DocumentFilterMode.magicColor:
+    // Arka plandaki sarı/gri gölgeleri aydınlat, yazıları koyulaştır ve doygunluğu koru
+      image = img.adjustColor(
+        image,
+        contrast: 1.45,
+        brightness: 1.15,
+        saturation: 1.1,
+      );
+      break;
+
+    case DocumentFilterMode.blackAndWhite:
+    // Yüksek kontrastlı fotokopi/metin modu
+      image = img.grayscale(image);
+      image = img.adjustColor(
+        image,
+        contrast: 1.8,
+        brightness: 1.25,
+      );
+      break;
+
+    case DocumentFilterMode.grayscale:
+      image = img.grayscale(image);
+      image = img.adjustColor(
+        image,
+        contrast: 1.2,
+        brightness: 1.05,
+      );
+      break;
+
+    case DocumentFilterMode.none:
+      break;
   }
 
-  // 3. KALİTE SIKIŞTIRMASI (JPEG ENCODE)
   final jpgBytes = img.encodeJpg(image, quality: quality);
   return Uint8List.fromList(jpgBytes);
 }

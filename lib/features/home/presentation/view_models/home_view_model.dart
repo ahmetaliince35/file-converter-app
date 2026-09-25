@@ -92,11 +92,11 @@ class HomeViewModel extends ChangeNotifier {
       if (kind == ConversionKind.image) {
         final outputPdf = await ImageToPdfConverter.convert(
           files,
-          onProgress: (current, total) {
+          onProgress: (current, totalCount) {
             _updateProgress(
-              progress: current / total,
-              currentFile: 'Resim $current / $total işleniyor...',
-              message: 'Resimler PDF yapılıyor (%${((current / total) * 100).toInt()})',
+              progress: current / totalCount,
+              currentFile: 'Resim $current / $totalCount işleniyor...',
+              message: 'Resimler PDF yapılıyor (%${((current / totalCount) * 100).toInt()})',
             );
           },
         );
@@ -128,6 +128,7 @@ class HomeViewModel extends ChangeNotifier {
                 microsoftAuth: _microsoftAuth,
               );
               _resultFiles.insert(0, converted);
+              break;
 
             case ConversionKind.txt:
               final converted = await TxtToPdfConverter.convert(
@@ -141,6 +142,7 @@ class HomeViewModel extends ChangeNotifier {
                 },
               );
               _resultFiles.insert(0, converted);
+              break;
 
             case ConversionKind.zip:
               _updateProgress(
@@ -149,11 +151,12 @@ class HomeViewModel extends ChangeNotifier {
                 message: 'Arşivden çıkartılıyor (${i + 1}/$total)',
               );
               _resultFiles.insertAll(0, await ZipExtractor.extract(file));
+              break;
 
             case ConversionKind.audio:
               final apiKey = await AudioToTextConverter.getSavedApiKey();
               if (apiKey == null || apiKey.isEmpty) {
-                throw Exception('Ses dönüştürmek için önce Groq API anahtarınızı tanımlamalısınız.');
+                throw Exception('Ses dönüştürmek için önce Deepgram API anahtarınızı tanımlamalısınız.');
               }
 
               _updateProgress(
@@ -163,6 +166,7 @@ class HomeViewModel extends ChangeNotifier {
               );
               final converted = await AudioToTextConverter.convert(file);
               _resultFiles.insert(0, converted);
+              break;
 
             case ConversionKind.image:
               break;
@@ -323,9 +327,7 @@ class HomeViewModel extends ChangeNotifier {
   @override
   void dispose() {
     _isDisposed = true;
-    for (final file in _resultFiles) {
-      TempFileManager.deleteFile(file);
-    }
+    TempFileManager.deleteFiles(_resultFiles);
     _resultFiles.clear();
     super.dispose();
   }
