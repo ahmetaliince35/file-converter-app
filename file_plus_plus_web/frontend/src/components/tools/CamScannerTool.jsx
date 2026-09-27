@@ -86,15 +86,27 @@ export default function CamScannerTool({ setLoading }) {
         const img = imageRef.current;
         img.src = url;
         img.onload = async () => {
-          const nw = img.naturalWidth;
-          const nh = img.naturalHeight;
+          const nw = img.naturalWidth || 1;
+          const nh = img.naturalHeight || 1;
           setNaturalDimensions({ width: nw, height: nh });
 
           setLoading(true);
           try {
             const res = await detectCornersApi(currentFile);
-            setPoints(res.data.points);
+            const returnedPoints = res.data?.points;
+
+            // Backend [[x, y], ...] dizisi döner; React için {x, y} formatına çeviriyoruz
+            if (Array.isArray(returnedPoints) && returnedPoints.length === 4) {
+              setPoints(
+                returnedPoints.map((pt) => 
+                  Array.isArray(pt) ? { x: pt[0], y: pt[1] } : { x: pt.x, y: pt.y }
+                )
+              );
+            } else {
+              throw new Error("Köşe formatı geçersiz");
+            }
           } catch {
+            // Algılama başarısız olursa güvenli varsayılan sınırlar
             setPoints([
               { x: nw * 0.08, y: nh * 0.08 },
               { x: nw * 0.92, y: nh * 0.08 },
@@ -109,6 +121,7 @@ export default function CamScannerTool({ setLoading }) {
     }
   });
 
+  // Canvas üzerinde görseli ve ayarlanabilir köşe noktalarını çizme
   useEffect(() => {
     if (!imageSrc || points.length !== 4) return;
     const canvas = canvasRef.current;
@@ -140,6 +153,7 @@ export default function CamScannerTool({ setLoading }) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, targetW, targetH);
 
+    // Dörtgen çerçeve çizgileri
     ctx.beginPath();
     ctx.moveTo(points[0].x * scaleX, points[0].y * scaleY);
     for (let i = 1; i < 4; i++) {
@@ -154,6 +168,7 @@ export default function CamScannerTool({ setLoading }) {
     ctx.fillStyle = 'rgba(56, 189, 248, 0.18)';
     ctx.fill();
 
+    // 4 köşe kontrol tutamaçları
     const radius = Math.max(12, targetW * 0.012);
     points.forEach((pt, index) => {
       const px = pt.x * scaleX;
@@ -187,16 +202,28 @@ export default function CamScannerTool({ setLoading }) {
   }, [naturalDimensions]);
 
   const handlePointerDown = (clientX, clientY) => {
-    const { x, y } = getCanvasCoords(clientX, clientY);
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const threshold = (naturalDimensions.width / canvas.getBoundingClientRect().width) * 32;
+    if (!canvas || points.length !== 4) return;
+    const { x, y } = getCanvasCoords(clientX, clientY);
+
+    // Ekranda tıklanan yerin piksel toleransı (yüksek çözünürlüklerde tıklamayı kolaylaştırır)
+    const rect = canvas.getBoundingClientRect();
+    const threshold = (naturalDimensions.width / rect.width) * 36;
+
+    let closestIdx = null;
+    let minDistance = Infinity;
 
     points.forEach((pt, idx) => {
-      if (Math.hypot(pt.x - x, pt.y - y) < threshold) {
-        setActivePoint(idx);
+      const dist = Math.hypot(pt.x - x, pt.y - y);
+      if (dist < threshold && dist < minDistance) {
+        minDistance = dist;
+        closestIdx = idx;
       }
     });
+
+    if (closestIdx !== null) {
+      setActivePoint(closestIdx);
+    }
   };
 
   const handlePointerMove = (clientX, clientY) => {
@@ -215,11 +242,14 @@ export default function CamScannerTool({ setLoading }) {
   const handlePointerUp = () => setActivePoint(null);
 
   const handleScan = async (selectedFilter = filterMode) => {
-    if (!file) return;
+    if (!file || points.length !== 4) return;
     setLoading(true);
     try {
+      // Backend OpenCV formatına uygun [[x, y], ...] listesi oluşturulur
       const rawPoints = points.map((p) => [Math.round(p.x), Math.round(p.y)]);
       const res = await camScannerApi(file, rawPoints, selectedFilter);
+
+      // Gelen Blob'u tarayıcıda görselleştirelim
       const blob = new Blob([res.data], { type: 'image/jpeg' });
       const fileName = `Taranmis_${file.name.substring(0, file.name.lastIndexOf('.')) || 'belge'}.jpg`;
 
@@ -233,7 +263,20 @@ export default function CamScannerTool({ setLoading }) {
         toolSource: 'CamScanner'
       });
     } catch (err) {
-      alert("Hata: " + (err.response?.data?.detail || "İşlem başarısız."));
+      let errorMessage = "İşlem gerçekleştirilemedi.";
+      if (err.response?.data instanceof Blob) {
+        // Blob olarak dönen 400/500 JSON hatasını okur
+        const text = await err.response.data.text();
+        try {
+          const parsed = JSON.parse(text);
+          errorMessage = parsed.detail || errorMessage;
+        } catch {
+          errorMessage = text || errorMessage;
+        }
+      } else if (err.response?.data?.detail) {
+        errorMessage = err.response.data.detail;
+      }
+      alert("Hata: " + errorMessage);
     } finally {
       setLoading(false);
     }
