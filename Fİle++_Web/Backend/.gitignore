@@ -1,0 +1,27 @@
+# Python Sanal Ortamları (Devasa DLL/PyTorch dosyalarını engeller)
+.venv/
+venv/
+ENV/
+env/
+
+# Derleme ve Önbellek Dosyaları
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Uygulama İçi Geçici Depolama ve Çalışma Dosyaları
+temp_storage/
+downloads/
+*.tmp
+*.log
+
+# Ortam Değişkenleri ve Gizli Anahtarlar
+.env
+.env.local
+
+# İşletim Sistemi ve IDE Dosyaları
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
