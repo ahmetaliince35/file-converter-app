@@ -159,7 +159,7 @@ class _SnippetOcrScreenState extends State<SnippetOcrScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Metin kopyalandı!'),
-        backgroundColor: Colors.teal,
+        backgroundColor: Color(0xFF16A34A),
         duration: Duration(seconds: 2),
       ),
     );
@@ -214,8 +214,8 @@ class _SnippetOcrScreenState extends State<SnippetOcrScreen> {
             Container(
               width: 80,
               height: 80,
-              decoration: BoxDecoration(color: Colors.teal.withValues(alpha: 0.1), shape: BoxShape.circle),
-              child: const Icon(Icons.crop_free_rounded, size: 40, color: Colors.teal),
+              decoration: BoxDecoration(color: const Color(0xFF6366F1).withValues(alpha: 0.1), shape: BoxShape.circle),
+              child: const Icon(Icons.crop_free_rounded, size: 40, color: Color(0xFF6366F1)),
             ),
             const SizedBox(height: 18),
             const Text('Fotoğrafı Büyüt ve Alanı Seç', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
@@ -258,7 +258,7 @@ class _SnippetOcrScreenState extends State<SnippetOcrScreen> {
           color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
           child: const Row(
             children: [
-              Icon(Icons.pinch_rounded, size: 16, color: Colors.teal),
+              Icon(Icons.pinch_rounded, size: 16, color: Color(0xFF6366F1)),
               SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -298,8 +298,8 @@ class _SnippetOcrScreenState extends State<SnippetOcrScreen> {
                     height: _boxH,
                     child: Container(
                       decoration: BoxDecoration(
-                        border: Border.all(color: Colors.cyanAccent, width: 2.2),
-                        color: Colors.cyanAccent.withValues(alpha: 0.15),
+                        border: Border.all(color: const Color(0xFF818CF8), width: 2.2),
+                        color: const Color(0xFF818CF8).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Stack(
@@ -333,7 +333,7 @@ class _SnippetOcrScreenState extends State<SnippetOcrScreen> {
                                 width: 28,
                                 height: 28,
                                 decoration: const BoxDecoration(
-                                  color: Colors.cyanAccent,
+                                  color: Color(0xFF818CF8),
                                   borderRadius: BorderRadius.only(topLeft: Radius.circular(8)),
                                 ),
                                 child: const Icon(Icons.aspect_ratio_rounded, size: 16, color: Colors.black87),
@@ -351,7 +351,7 @@ class _SnippetOcrScreenState extends State<SnippetOcrScreen> {
                     right: 14,
                     child: FloatingActionButton.extended(
                       heroTag: 'ocr_action_btn',
-                      backgroundColor: Colors.teal.shade700,
+                      backgroundColor: const Color(0xFF4F46E5),
                       foregroundColor: Colors.white,
                       onPressed: _isReading ? null : _processSelectedArea,
                       icon: _isReading

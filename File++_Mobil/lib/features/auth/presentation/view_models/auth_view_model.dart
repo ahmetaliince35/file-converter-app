@@ -27,14 +27,16 @@ class AuthViewModel extends ChangeNotifier {
     _initialized = true;
 
     final prefs = await SharedPreferences.getInstance();
-    _isGuest = prefs.getBool(_guestKey) ?? false;
+    // Kalıcı misafir modunu sıfırla - böylece kullanıcı açılışta Google ve Microsoft giriş ekranını görür
+    _isGuest = false;
+    await prefs.setBool(_guestKey, false);
 
     await Future.wait([
       _googleAuth.initSilently(),
       _microsoftAuth.initSilently(),
     ]);
 
-    // Eğer Google veya Microsoft oturumu açılmışsa misafir modunu otomatik sıfırla
+    // Eğer Google veya Microsoft oturumu açılmışsa misafir modunu kapat
     if (_googleAuth.isSignedIn || _microsoftAuth.isSignedIn) {
       _isGuest = false;
       await prefs.setBool(_guestKey, false);

@@ -57,20 +57,29 @@ export default function PdfMergeTool({ setLoading }) {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
-      'application/pdf': ['.pdf']
+      'application/pdf': ['.pdf'],
+      'application/x-pdf': ['.pdf'],
+      'application/octet-stream': ['.pdf'],
     },
     maxSize: MAX_UPLOAD_LIMIT,
     onDrop: (acceptedFiles, fileRejections) => {
-      if (fileRejections.length > 0) {
-        const isSizeErr = fileRejections.some(r => r.errors.some(e => e.code === 'file-too-large'));
-        const isTypeErr = fileRejections.some(r => r.errors.some(e => e.code === 'file-invalid-type'));
+      const validFiles = [
+        ...acceptedFiles,
+        ...fileRejections
+          .filter(r => r.file && r.file.name && r.file.name.toLowerCase().endsWith('.pdf'))
+          .map(r => r.file)
+      ];
 
-        if (isSizeErr) alert('1024 MB sınırını aşan PDF dosyaları atlandı.');
-        if (isTypeErr) alert('Lütfen yalnızca .pdf uzantılı dosyalar yükleyin.');
+      const uniqueMap = new Map();
+      for (const f of validFiles) {
+        uniqueMap.set(`${f.name}_${f.size}`, f);
       }
+      const allPdfs = Array.from(uniqueMap.values());
 
-      if (acceptedFiles.length > 0) {
-        setFiles((prev) => [...prev, ...acceptedFiles]);
+      if (allPdfs.length > 0) {
+        setFiles((prev) => [...prev, ...allPdfs]);
+      } else if (fileRejections.length > 0) {
+        alert('Lütfen geçerli bir .pdf dosyası seçin.');
       }
     },
   });

@@ -31,37 +31,56 @@ export default function PdfExtractTool({ setLoading }) {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
-      'application/pdf': ['.pdf']
+      'application/pdf': ['.pdf'],
+      'application/x-pdf': ['.pdf'],
+      'application/octet-stream': ['.pdf'],
     },
     maxSize: MAX_UPLOAD_LIMIT,
     onDrop: async (acceptedFiles, fileRejections) => {
-      if (fileRejections.length > 0) {
-        const isSizeErr = fileRejections.some(r => r.errors.some(e => e.code === 'file-too-large'));
-        const isTypeErr = fileRejections.some(r => r.errors.some(e => e.code === 'file-invalid-type'));
+      const validFiles = [
+        ...acceptedFiles,
+        ...fileRejections
+          .filter(r => r.file && r.file.name && r.file.name.toLowerCase().endsWith('.pdf'))
+          .map(r => r.file)
+      ];
 
-        if (isSizeErr) alert('1024 MB sınırını aşan PDF dosyaları atlandı.');
-        if (isTypeErr) alert('Lütfen yalnızca .pdf uzantılı dosyalar yükleyin.');
+      const uniqueMap = new Map();
+      for (const f of validFiles) {
+        uniqueMap.set(`${f.name}_${f.size}`, f);
       }
+      const allPdfs = Array.from(uniqueMap.values());
 
-      if (acceptedFiles.length === 0) return;
+      if (allPdfs.length === 0) {
+        if (fileRejections.length > 0) {
+          alert('Lütfen geçerli bir .pdf dosyası seçin.');
+        }
+        return;
+      }
 
       setLoading(true);
       const newDocs = [];
 
-      for (const file of acceptedFiles) {
+      for (const file of allPdfs) {
         try {
           const res = await getPdfThumbnailsApi(file);
-          newDocs.push({
-            file,
-            pages: res.data.thumbnails || [],
-            selectedPages: []
-          });
+          if (res.data && res.data.thumbnails && res.data.thumbnails.length > 0) {
+            newDocs.push({
+              file,
+              pages: res.data.thumbnails,
+              selectedPages: []
+            });
+          } else {
+            alert(`${file.name} belgesinin sayfaları okunamadı.`);
+          }
         } catch (err) {
           console.error(file.name + ' yüklenemedi:', err);
+          alert(`${file.name} önizlemesi yüklenirken hata oluştu: ` + (err.response?.data?.detail || err.message));
         }
       }
 
-      setDocuments((prev) => [...prev, ...newDocs]);
+      if (newDocs.length > 0) {
+        setDocuments((prev) => [...prev, ...newDocs]);
+      }
       setLoading(false);
     },
   });
@@ -69,50 +88,66 @@ export default function PdfExtractTool({ setLoading }) {
   const activeDoc = documents[activeDocIndex];
 
   const togglePage = (pageNum) => {
-    setDocuments((prev) => {
-      const next = [...prev];
-      const target = next[activeDocIndex];
-      const exists = target.selectedPages.includes(pageNum);
-      target.selectedPages = exists
-        ? target.selectedPages.filter((p) => p !== pageNum)
-        : [...target.selectedPages, pageNum].sort((a, b) => a - b);
-      return next;
-    });
+    const num = Number(pageNum);
+    setDocuments((prev) =>
+      prev.map((doc, idx) => {
+        if (idx !== activeDocIndex) return doc;
+        const exists = doc.selectedPages.some((p) => Number(p) === num);
+        const nextSelected = exists
+          ? doc.selectedPages.filter((p) => Number(p) !== num)
+          : [...doc.selectedPages, num].sort((a, b) => a - b);
+        return {
+          ...doc,
+          selectedPages: nextSelected,
+        };
+      })
+    );
   };
 
   const selectAll = () => {
     if (!activeDoc) return;
-    setDocuments((prev) => {
-      const next = [...prev];
-      const target = next[activeDocIndex];
-      const allSelected = target.selectedPages.length === target.pages.length;
-      target.selectedPages = allSelected ? [] : target.pages.map((p) => p.page_number);
-      return next;
-    });
+    setDocuments((prev) =>
+      prev.map((doc, idx) => {
+        if (idx !== activeDocIndex) return doc;
+        const allSelected = doc.selectedPages.length === doc.pages.length;
+        return {
+          ...doc,
+          selectedPages: allSelected
+            ? []
+            : doc.pages.map((p) => Number(p.page_number)),
+        };
+      })
+    );
   };
 
   const selectOddPages = () => {
     if (!activeDoc) return;
-    setDocuments((prev) => {
-      const next = [...prev];
-      const target = next[activeDocIndex];
-      target.selectedPages = target.pages
-        .filter((p) => p.page_number % 2 !== 0)
-        .map((p) => p.page_number);
-      return next;
-    });
+    setDocuments((prev) =>
+      prev.map((doc, idx) => {
+        if (idx !== activeDocIndex) return doc;
+        return {
+          ...doc,
+          selectedPages: doc.pages
+            .filter((p) => Number(p.page_number) % 2 !== 0)
+            .map((p) => Number(p.page_number)),
+        };
+      })
+    );
   };
 
   const selectEvenPages = () => {
     if (!activeDoc) return;
-    setDocuments((prev) => {
-      const next = [...prev];
-      const target = next[activeDocIndex];
-      target.selectedPages = target.pages
-        .filter((p) => p.page_number % 2 === 0)
-        .map((p) => p.page_number);
-      return next;
-    });
+    setDocuments((prev) =>
+      prev.map((doc, idx) => {
+        if (idx !== activeDocIndex) return doc;
+        return {
+          ...doc,
+          selectedPages: doc.pages
+            .filter((p) => Number(p.page_number) % 2 === 0)
+            .map((p) => Number(p.page_number)),
+        };
+      })
+    );
   };
 
   const removeDocument = (index, e) => {
@@ -286,7 +321,8 @@ export default function PdfExtractTool({ setLoading }) {
           {activeDoc && (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-[500px] overflow-y-auto p-2 bg-slate-950/60 rounded-2xl border border-slate-800/80 custom-scrollbar">
               {activeDoc.pages.map((p) => {
-                const isSelected = activeDoc.selectedPages.includes(p.page_number);
+                const pageNum = Number(p.page_number);
+                const isSelected = activeDoc.selectedPages.some((num) => Number(num) === pageNum);
                 return (
                   <div
                     key={p.page_number}

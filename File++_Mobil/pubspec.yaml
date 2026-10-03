@@ -72,6 +72,7 @@ dependencies:
   #10. Text Recognizer Araçları
   google_mlkit_text_recognition: ^0.14.0
   image_cropper: ^12.2.1
+  receive_sharing_intent: 1.8.1
 
 dev_dependencies:
   flutter_test:

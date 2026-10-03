@@ -59,12 +59,12 @@ void showApiKeyDialog(BuildContext context, {VoidCallback? onSaved}) {
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
             ),
             const SizedBox(height: 8),
-            _buildStepRow('1', 'console.deepgram.com adresine ücretsiz kaydolun.'),
-            _buildStepRow('2', 'Girişte anket/tanıtım ekranı gelirse "Skip" butonuna basın.'),
-            _buildStepRow('3', 'Sol menüden "API Keys" sekmesine tıklayın.'),
-            _buildStepRow('4', '"Create a New API Key" butonuna basın.'),
-            _buildStepRow('5', 'Advanced sekmesinde Rol seçimini "Admin" yapın. (Kalan saatinizi ve kredinizi canlı görebilmeniz için gereklidir).'),
-            _buildStepRow('6', 'Oluşturulan anahtarı kopyalayıp buraya yapıştırın.'),
+            _buildStepRow(ctx, '1', 'console.deepgram.com adresine ücretsiz kaydolun.'),
+            _buildStepRow(ctx, '2', 'Girişte anket/tanıtım ekranı gelirse "Skip" butonuna basın.'),
+            _buildStepRow(ctx, '3', 'Sol menüden "API Keys" sekmesine tıklayın.'),
+            _buildStepRow(ctx, '4', '"Create a New API Key" butonuna basın.'),
+            _buildStepRow(ctx, '5', 'Advanced sekmesinde Rol seçimini "Admin" yapın. (Kalan saatinizi ve kredinizi canlı görebilmeniz için gereklidir).'),
+            _buildStepRow(ctx, '6', 'Oluşturulan anahtarı kopyalayıp buraya yapıştırın.'),
             const SizedBox(height: 14),
             Center(
               child: FilledButton.tonalIcon(
@@ -97,7 +97,8 @@ void showApiKeyDialog(BuildContext context, {VoidCallback? onSaved}) {
   );
 }
 
-Widget _buildStepRow(String number, String text, {bool isHighlight = false}) {
+Widget _buildStepRow(BuildContext context, String number, String text, {bool isHighlight = false}) {
+  final colorScheme = Theme.of(context).colorScheme;
   return Padding(
     padding: const EdgeInsets.only(bottom: 6.0),
     child: Row(
@@ -108,15 +109,15 @@ Widget _buildStepRow(String number, String text, {bool isHighlight = false}) {
           height: 18,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: isHighlight ? Colors.teal : Colors.grey.shade400,
+            color: isHighlight ? colorScheme.primary : colorScheme.outline.withValues(alpha: 0.3),
             shape: BoxShape.circle,
           ),
           child: Text(
             number,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.bold,
-              color: Colors.white,
+              color: isHighlight ? colorScheme.onPrimary : colorScheme.onSurface,
             ),
           ),
         ),
@@ -127,7 +128,7 @@ Widget _buildStepRow(String number, String text, {bool isHighlight = false}) {
             style: TextStyle(
               fontSize: 12,
               fontWeight: isHighlight ? FontWeight.bold : FontWeight.normal,
-              color: isHighlight ? Colors.teal.shade800 : Colors.black87,
+              color: isHighlight ? colorScheme.primary : colorScheme.onSurface.withValues(alpha: 0.85),
             ),
           ),
         ),

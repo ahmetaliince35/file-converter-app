@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import '../../../../core/files/temp_file_manager.dart';
 import '../../data/doc_scanner_service.dart';
 
 class DocScannerScreen extends StatefulWidget {
@@ -62,7 +61,7 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
     final picker = ImagePicker();
 
     if (source == ImageSource.camera) {
-      final photo = await picker.pickImage(source: ImageSource.camera, imageQuality: 95);
+      final photo = await picker.pickImage(source: ImageSource.camera, imageQuality: 92);
       if (photo != null) {
         setState(() {
           _images.add(File(photo.path));
@@ -70,7 +69,7 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
         });
       }
     } else {
-      final pickedFiles = await picker.pickMultiImage(imageQuality: 95);
+      final pickedFiles = await picker.pickMultiImage(imageQuality: 92);
       if (pickedFiles.isNotEmpty) {
         setState(() {
           _images.addAll(pickedFiles.map((x) => File(x.path)));
@@ -144,75 +143,71 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
         context: context,
         isDismissible: false,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
         builder: (ctx) {
+          final colorScheme = Theme.of(ctx).colorScheme;
           return Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 30),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.green, size: 52),
-                const SizedBox(height: 12),
+                const Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A), size: 48),
+                const SizedBox(height: 10),
                 const Text(
-                  'Taranmış PDF Belgeniz Hazır!',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                  'Taranmış PDF Belgeniz Hazır',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey.shade300),
+                    color: colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.5)),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       Column(
                         children: [
-                          const Text('Ham Görseller', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                          const SizedBox(height: 4),
+                          Text('Ham Görseller', style: TextStyle(fontSize: 11, color: colorScheme.outline)),
+                          const SizedBox(height: 3),
                           Text(
                             _formatBytes(originalTotalBytes),
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.redAccent),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFFDC2626)),
                           ),
                         ],
                       ),
-                      const Icon(Icons.arrow_forward_rounded, color: Colors.grey),
+                      Icon(Icons.arrow_forward_rounded, color: colorScheme.outline, size: 18),
                       Column(
                         children: [
-                          const Text('Optimize PDF', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                          const SizedBox(height: 4),
+                          Text('Optimize PDF', style: TextStyle(fontSize: 11, color: colorScheme.outline)),
+                          const SizedBox(height: 3),
                           Text(
                             _formatBytes(newBytes),
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.green),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF16A34A)),
                           ),
                         ],
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 Text(
                   '%${savingsPercent.toStringAsFixed(1)} boyut tasarrufu sağlandı',
-                  style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 13),
+                  style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold, fontSize: 12),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
                 SizedBox(
                   width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.indigo,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
+                  height: 46,
+                  child: FilledButton(
                     onPressed: () {
                       Navigator.pop(ctx);
                       Navigator.pop(context, pdfFile);
                     },
-                    child: const Text('Tamamla ve Listeye Ekle', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: const Text('Tamamla ve Listeye Ekle', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                   ),
                 ),
               ],
@@ -223,7 +218,7 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Hata oluştu: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Hata oluştu: $e'), backgroundColor: const Color(0xFFDC2626)),
         );
       }
     } finally {
@@ -233,22 +228,24 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final totalBytes = _calculateTotalBytes();
 
     return PopScope(
       canPop: !_isProcessing,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Belge Tarama Stüdyosu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          title: const Text('Belge Tarama Stüdyosu'),
           actions: [
             IconButton(
               tooltip: 'Kamerayla Sayfa Çek',
-              icon: const Icon(Icons.add_a_photo_rounded),
+              icon: const Icon(Icons.add_a_photo_rounded, size: 20),
               onPressed: _isProcessing ? null : () => _addMoreImages(source: ImageSource.camera),
             ),
             IconButton(
               tooltip: 'Galeriden Sayfa Ekle',
-              icon: const Icon(Icons.add_photo_alternate_rounded),
+              icon: const Icon(Icons.add_photo_alternate_rounded, size: 20),
               onPressed: _isProcessing ? null : () => _addMoreImages(source: ImageSource.gallery),
             ),
           ],
@@ -260,15 +257,15 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const CircularProgressIndicator(color: Colors.indigo),
+                CircularProgressIndicator(color: colorScheme.primary),
                 const SizedBox(height: 24),
                 SizedBox(
                   width: 220,
                   child: LinearProgressIndicator(
                     value: _totalPages > 0 ? (_currentPage / _totalPages) : null,
-                    backgroundColor: Colors.grey.shade200,
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.indigo),
-                    minHeight: 8,
+                    backgroundColor: colorScheme.surfaceContainerHighest,
+                    valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                    minHeight: 6,
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
@@ -277,13 +274,13 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
                   _totalPages > 0
                       ? 'Sayfa işleniyor: $_currentPage / $_totalPages (%${((_currentPage / _totalPages) * 100).toInt()})'
                       : 'İşlem başlatılıyor...',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text(
                   _statusText,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.grey, fontSize: 13),
+                  style: TextStyle(color: colorScheme.outline, fontSize: 12),
                 ),
               ],
             ),
@@ -293,29 +290,29 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
           children: [
             // Durum ve Sayfa Bilgisi
             Container(
-              margin: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+              margin: const EdgeInsets.fromLTRB(16, 6, 16, 6),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.indigo.shade50,
+                color: colorScheme.surfaceContainerLow,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.indigo.shade100),
+                border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.5)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Row(
                     children: [
-                      const Icon(Icons.document_scanner_rounded, color: Colors.indigo, size: 18),
+                      Icon(Icons.document_scanner_rounded, color: colorScheme.primary, size: 17),
                       const SizedBox(width: 8),
                       Text(
                         '${_images.length} Sayfa Hazır',
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 13),
+                        style: TextStyle(fontWeight: FontWeight.bold, color: colorScheme.primary, fontSize: 12.5),
                       ),
                     ],
                   ),
                   Text(
-                    'Boyut: ${_formatBytes(totalBytes)}',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black54),
+                    'Toplam: ${_formatBytes(totalBytes)}',
+                    style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w500, color: colorScheme.outline),
                   ),
                 ],
               ),
@@ -324,20 +321,20 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
             // CamScanner Filtre Çubuğu
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               child: Row(
                 children: [
-                  _filterChip('Sihirli Renk', DocumentFilterMode.magicColor, Icons.auto_fix_high_rounded),
+                  _filterChip('Sihirli Renk', DocumentFilterMode.magicColor, Icons.auto_fix_high_rounded, colorScheme),
                   const SizedBox(width: 8),
-                  _filterChip('Temiz Metin (S&B)', DocumentFilterMode.blackAndWhite, Icons.filter_b_and_w_rounded),
+                  _filterChip('Temiz Metin (S&B)', DocumentFilterMode.blackAndWhite, Icons.filter_b_and_w_rounded, colorScheme),
                   const SizedBox(width: 8),
-                  _filterChip('Gri Ton', DocumentFilterMode.grayscale, Icons.gradient_rounded),
+                  _filterChip('Gri Ton', DocumentFilterMode.grayscale, Icons.gradient_rounded, colorScheme),
                   const SizedBox(width: 8),
-                  _filterChip('Doğal', DocumentFilterMode.none, Icons.photo_rounded),
+                  _filterChip('Doğal', DocumentFilterMode.none, Icons.photo_rounded, colorScheme),
                 ],
               ),
             ),
-            const Divider(height: 10),
+            Divider(height: 8, color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
 
             // Önizleme ve Sayfa Düzenleme Alanı
             Expanded(
@@ -346,12 +343,12 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.document_scanner_outlined, size: 64, color: Colors.grey.shade400),
+                    Icon(Icons.document_scanner_outlined, size: 54, color: colorScheme.outlineVariant),
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       'Henüz sayfa taranmadı.\nSağ üstteki butonlardan kamera veya galeri seçin.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey, height: 1.4),
+                      style: TextStyle(color: colorScheme.outline, height: 1.4, fontSize: 12.5),
                     ),
                   ],
                 ),
@@ -371,9 +368,11 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
                           child: SizedBox(
                             height: MediaQuery.of(context).size.height * 0.46,
                             child: Card(
-                              elevation: 4,
-                              shadowColor: Colors.black26,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
+                              ),
                               clipBehavior: Clip.antiAlias,
                               child: Stack(
                                 fit: StackFit.expand,
@@ -386,14 +385,14 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
                                     top: 10,
                                     left: 10,
                                     child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                                       decoration: BoxDecoration(
-                                        color: Colors.black.withValues(alpha: 0.65),
-                                        borderRadius: BorderRadius.circular(8),
+                                        color: Colors.black54,
+                                        borderRadius: BorderRadius.circular(6),
                                       ),
                                       child: Text(
                                         '${index + 1} / ${_images.length}',
-                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10.5),
                                       ),
                                     ),
                                   ),
@@ -401,11 +400,11 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
                                     top: 10,
                                     right: 10,
                                     child: CircleAvatar(
-                                      radius: 16,
-                                      backgroundColor: Colors.black.withValues(alpha: 0.65),
+                                      radius: 15,
+                                      backgroundColor: Colors.black54,
                                       child: IconButton(
                                         padding: EdgeInsets.zero,
-                                        icon: const Icon(Icons.delete_rounded, color: Colors.redAccent, size: 18),
+                                        icon: const Icon(Icons.delete_rounded, color: Colors.white, size: 16),
                                         onPressed: () {
                                           setState(() {
                                             _images.removeAt(index);
@@ -427,7 +426,7 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
                     ),
                   ),
 
-                  // Sayfa Altı Hızlı Araçlar (Döndürme, Öne/Arkaya Taşıma)
+                  // Sayfa Altı Hızlı Araçlar
                   if (_images.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -437,22 +436,22 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
                           IconButton.filledTonal(
                             visualDensity: VisualDensity.compact,
                             tooltip: 'Önceki Sayfayla Değiştir',
-                            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                            icon: const Icon(Icons.arrow_back_rounded, size: 17),
                             onPressed: _activeCarouselIndex > 0
                                 ? () => _reorderPage(_activeCarouselIndex, _activeCarouselIndex - 1)
                                 : null,
                           ),
                           const SizedBox(width: 12),
                           ActionChip(
-                            avatar: const Icon(Icons.rotate_right_rounded, size: 18, color: Colors.indigo),
-                            label: const Text('90° Döndür', style: TextStyle(fontSize: 12)),
+                            avatar: Icon(Icons.rotate_right_rounded, size: 16, color: colorScheme.primary),
+                            label: const Text('90° Döndür', style: TextStyle(fontSize: 11.5)),
                             onPressed: _rotateCurrentPage,
                           ),
                           const SizedBox(width: 12),
                           IconButton.filledTonal(
                             visualDensity: VisualDensity.compact,
                             tooltip: 'Sonraki Sayfayla Değiştir',
-                            icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                            icon: const Icon(Icons.arrow_forward_rounded, size: 17),
                             onPressed: _activeCarouselIndex < _images.length - 1
                                 ? () => _reorderPage(_activeCarouselIndex, _activeCarouselIndex + 1)
                                 : null,
@@ -466,34 +465,22 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
               ),
             ),
 
-            // Alt PDF Oluştur Butonu
+            // Alt PDF Oluştur Butonu (Temaya tam uyumlu)
             Container(
               padding: const EdgeInsets.all(16.0),
               decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, -4),
-                  ),
-                ],
+                color: colorScheme.surface,
+                border: Border(top: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.4))),
               ),
               child: SizedBox(
                 width: double.infinity,
-                height: 50,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.indigo,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
+                height: 48,
+                child: FilledButton.icon(
                   onPressed: _images.isEmpty ? null : _convertToPdf,
-                  icon: const Icon(Icons.picture_as_pdf_rounded),
+                  icon: const Icon(Icons.picture_as_pdf_rounded, size: 18),
                   label: Text(
                     '${_images.length} Sayfayı Belge Olarak Kaydet',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -504,17 +491,16 @@ class _DocScannerScreenState extends State<DocScannerScreen> {
     );
   }
 
-  Widget _filterChip(String title, DocumentFilterMode mode, IconData icon) {
+  Widget _filterChip(String title, DocumentFilterMode mode, IconData icon, ColorScheme colorScheme) {
     final isSelected = _selectedFilter == mode;
     return ChoiceChip(
-      avatar: Icon(icon, size: 16, color: isSelected ? Colors.white : Colors.indigo),
+      avatar: Icon(icon, size: 15, color: isSelected ? Colors.white : colorScheme.onSurfaceVariant),
       label: Text(title),
       selected: isSelected,
-      selectedColor: Colors.indigo,
       labelStyle: TextStyle(
-        color: isSelected ? Colors.white : Colors.black87,
+        color: isSelected ? Colors.white : colorScheme.onSurface,
         fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-        fontSize: 12,
+        fontSize: 11.5,
       ),
       onSelected: (selected) {
         if (selected) setState(() => _selectedFilter = mode);

@@ -11,10 +11,11 @@ String mapErrorMessage(Object error) {
   }
 
   // 2. Yetkilendirme / Token Hataları
-  if (text.contains('unauthorized') ||
-      text.contains('401') ||
-      text.contains('invalid api key')) {
-    return 'Groq API anahtarı geçersiz veya süresi dolmuş. Lütfen anahtarınızı kontrol edin.';
+  if (text.contains('api key') || text.contains('apikey') || text.contains('groq') || text.contains('deepgram')) {
+    return 'API anahtarı geçersiz veya süresi dolmuş. Lütfen anahtarınızı kontrol edin.';
+  }
+  if (text.contains('unauthorized') || text.contains('401') || text.contains('token')) {
+    return 'Oturum zaman aşımına uğradı, tekrar giriş yapın.';
   }
 
   // 3. Zaman Aşımı Hataları

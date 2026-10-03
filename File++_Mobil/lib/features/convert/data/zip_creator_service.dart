@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 import 'package:archive/archive_io.dart';
 import '../../../../core/files/temp_file_manager.dart';
 

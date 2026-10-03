@@ -7,9 +7,10 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+
 import '../data/audio_to_text_converter.dart';
 import '../presentation/widget/api_key_dialog.dart';
-import 'package:printing/printing.dart';
 
 String mapErrorMessage(Object error) {
   final text = error.toString().toLowerCase();
@@ -33,7 +34,7 @@ String mapErrorMessage(Object error) {
   }
 
   if (text.contains('outofmemory') || text.contains('out of memory')) {
-    return 'Bellek yetersiz. Lütfen daha küçük bir dosya seçin.';
+    return 'Bellek yetersiz. Lütfen daha küçük bir ses dosyası seçin.';
   }
 
   if (text.contains('insufficient') || text.contains('payment_required') || text.contains('402')) {
@@ -49,7 +50,9 @@ String mapErrorMessage(Object error) {
 }
 
 class AudioToTextScreen extends StatefulWidget {
-  const AudioToTextScreen({super.key});
+  final File? initialAudioFile;
+
+  const AudioToTextScreen({super.key, this.initialAudioFile});
 
   @override
   State<AudioToTextScreen> createState() => _AudioToTextScreenState();
@@ -90,6 +93,9 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialAudioFile != null) {
+      _selectedAudioFile = widget.initialAudioFile;
+    }
     _loadApiKey();
     _initAudioPlayer();
   }
@@ -153,7 +159,7 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
   Future<void> _pickAudioFile() async {
     HapticFeedback.lightImpact();
 
-    // withData: false yapılarak dosyanın RAM'e dolması engellenir
+    // withData: false yapılarak büyük dosyaların RAM'e yüklenmesi engellenir
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['mp3', 'm4a', 'wav', 'ogg', 'opus', 'aac', 'mp4', 'flac', 'webm'],
@@ -164,6 +170,19 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
       final pickedPath = result.files.single.path!;
       final sourceFile = File(pickedPath);
 
+      // 500 MB boyut sınırı kontrolü (OOM crash önleme)
+      final size = await sourceFile.length();
+      if (size > 500 * 1024 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Dosya boyutu çok büyük (Maks. 500 MB). Lütfen daha küçük bir kayıt seçin.'),
+            backgroundColor: Color(0xFFDC2626),
+          ),
+        );
+        return;
+      }
+
       final originalExt = p.extension(pickedPath).replaceAll('.', '').trim().toLowerCase();
       final ext = originalExt.isEmpty ? 'mp3' : originalExt;
 
@@ -173,7 +192,6 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
         'audio_${DateTime.now().millisecondsSinceEpoch}.$ext',
       );
 
-      // RAM'e almadan doğrudan disk seviyesinde kopyalama:
       final targetFile = await sourceFile.copy(safePath);
 
       await _audioPlayer.stop();
@@ -225,8 +243,8 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
 
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Ses başarıyla çözüldü ve çalışma alanına eklendi!'),
-            backgroundColor: Colors.teal,
+            content: Text('Ses başarıyla metne çevrildi ve çalışma kağıdına aktarıldı!'),
+            backgroundColor: Color(0xFF16A34A),
             duration: Duration(seconds: 2),
           ),
         );
@@ -240,7 +258,7 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(friendlyError),
-            backgroundColor: Colors.red.shade800,
+            backgroundColor: const Color(0xFFDC2626),
             duration: const Duration(seconds: 5),
             action: SnackBarAction(
               label: 'Tamam',
@@ -273,12 +291,14 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
         Navigator.pop(context, outputTxt);
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('TXT kaydedilemedi: $e')),
       );
     }
   }
 
+  // Büyük metinlerde bellek patlamasını ve TooManyPagesException crash'ini önleyen PDF üretici
   Future<void> _saveAsPdfFile() async {
     final content = _textController.text.trim();
     if (content.isEmpty) {
@@ -292,43 +312,70 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
       final pdf = pw.Document();
 
       // Türkçe karakterleri (ş, ğ, ı, ö, ç, ü) destekleyen fontları yükle
-      // internetten Google Fonts üzerinden çeker ve PDF'e gömer
       final fontRegular = await PdfGoogleFonts.robotoRegular();
       final fontBold = await PdfGoogleFonts.robotoBold();
+
+      // Metni çok büyük dosyalarda tek bir paragraph'a vermeyip parça parça ekleyerek RAM'i koru
+      final rawParagraphs = content.split('\n');
+      final contentWidgets = <pw.Widget>[];
+
+      contentWidgets.add(
+        pw.Header(
+          level: 0,
+          child: pw.Text(
+            'Ses Transkript Belgesi',
+            style: pw.TextStyle(
+              font: fontBold,
+              fontSize: 18,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.blueGrey900,
+            ),
+          ),
+        ),
+      );
+      contentWidgets.add(pw.Divider(thickness: 0.8, color: PdfColors.grey300));
+      contentWidgets.add(pw.SizedBox(height: 10));
+
+      // Paragrafları gruplayarak PDF belgesine yerleştir
+      for (final pText in rawParagraphs) {
+        final trimmed = pText.trim();
+        if (trimmed.isEmpty) {
+          contentWidgets.add(pw.SizedBox(height: 6));
+        } else {
+          contentWidgets.add(
+            pw.Paragraph(
+              text: trimmed,
+              style: pw.TextStyle(
+                font: fontRegular,
+                fontSize: 10.5,
+                lineSpacing: 2.2,
+                color: PdfColors.grey900,
+              ),
+            ),
+          );
+        }
+      }
 
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(36),
+          maxPages: 1000, // Varsayılan 100 sayfa sınırını aşarak crash'i önler
+          margin: const pw.EdgeInsets.symmetric(horizontal: 36, vertical: 36),
           theme: pw.ThemeData.withFont(
             base: fontRegular,
             bold: fontBold,
           ),
-          build: (pw.Context context) {
-            return [
-              pw.Header(
-                level: 0,
-                child: pw.Text(
-                  'Ses Transkript Belgesi',
-                  style: pw.TextStyle(
-                    font: fontBold,
-                    fontSize: 20,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
-              ),
-              pw.Divider(thickness: 1, color: PdfColors.grey400),
-              pw.SizedBox(height: 12),
-              pw.Paragraph(
-                text: content,
-                style: pw.TextStyle(
-                  font: fontRegular,
-                  fontSize: 12,
-                  lineSpacing: 3,
-                ),
-              ),
-            ];
-          },
+          header: (ctx) => pw.Container(
+            alignment: pw.Alignment.centerRight,
+            margin: const pw.EdgeInsets.only(bottom: 8),
+            child: pw.Text('File++ Transkript Stüdyosu', style: pw.TextStyle(font: fontRegular, fontSize: 8, color: PdfColors.grey500)),
+          ),
+          footer: (ctx) => pw.Container(
+            alignment: pw.Alignment.centerRight,
+            margin: const pw.EdgeInsets.only(top: 8),
+            child: pw.Text('Sayfa ${ctx.pageNumber} / ${ctx.pagesCount}', style: pw.TextStyle(font: fontRegular, fontSize: 8, color: PdfColors.grey500)),
+          ),
+          build: (pw.Context context) => contentWidgets,
         ),
       );
 
@@ -356,13 +403,16 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final wordCount = _textController.text.trim().isEmpty
+        ? 0
+        : _textController.text.trim().split(RegExp(r'\s+')).length;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Ses Transkript Editörü'),
+        title: const Text('Ses Transkript Stüdyosu'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.copy_rounded),
+            icon: const Icon(Icons.copy_rounded, size: 20),
             tooltip: 'Metni Kopyala',
             onPressed: () {
               if (_textController.text.trim().isNotEmpty) {
@@ -374,7 +424,7 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.key_rounded),
+            icon: const Icon(Icons.key_rounded, size: 20),
             tooltip: 'API Anahtarı',
             onPressed: () => showApiKeyDialog(context, onSaved: _loadApiKey),
           ),
@@ -384,15 +434,15 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
           ? const Center(child: CircularProgressIndicator())
           : SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _buildApiKeyCard(theme, colorScheme),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
               _buildAudioControlCard(colorScheme),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
               // Dil Seçimi ve Metne Ekle Butonu
               Row(
@@ -402,10 +452,10 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
-                        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                        color: colorScheme.surfaceContainerLow,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+                          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                         ),
                       ),
                       child: DropdownButtonHideUnderline(
@@ -413,6 +463,7 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                           value: _selectedLanguage,
                           isExpanded: true,
                           borderRadius: BorderRadius.circular(12),
+                          dropdownColor: colorScheme.surface,
                           items: _languages.entries.map((entry) {
                             return DropdownMenuItem(
                               value: entry.key,
@@ -435,7 +486,7 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                     flex: 6,
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       onPressed: (_selectedAudioFile == null || _isConverting)
@@ -443,11 +494,11 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                           : _startConversion,
                       icon: _isConverting
                           ? const SizedBox(
-                        width: 18,
-                        height: 18,
+                        width: 16,
+                        height: 16,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                       )
-                          : const Icon(Icons.add_task_rounded, size: 20),
+                          : const Icon(Icons.add_task_rounded, size: 18),
                       label: Text(
                         _isConverting ? 'Çözülüyor...' : 'Metne Ekle',
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
@@ -459,50 +510,79 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
 
               const SizedBox(height: 16),
 
-              // BEYAZ ŞABLON ÇALIŞMA ALANI
+              // TEMADAN BAĞIMSIZ SAF BEYAZ STÜDYO ÇALIŞMA ALANI
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    'Transkript Not Defteri',
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                  Row(
+                    children: [
+                      const Text(
+                        'Transkript Not Defteri',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '$wordCount kelime',
+                          style: TextStyle(fontSize: 10, color: colorScheme.outline, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
                   ),
                   if (_textController.text.isNotEmpty)
                     TextButton.icon(
                       style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
                       onPressed: () => setState(() => _textController.clear()),
-                      icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
-                      label: const Text('Temizle', style: TextStyle(color: Colors.red, fontSize: 12)),
+                      icon: const Icon(Icons.delete_outline, size: 16, color: Color(0xFFDC2626)),
+                      label: const Text('Temizle', style: TextStyle(color: Color(0xFFDC2626), fontSize: 12)),
                     ),
                 ],
               ),
               const SizedBox(height: 6),
 
+              // TEMADAN TAMAMEN BAĞIMSIZ BEYAZ KAĞIT DOKUSU
               Container(
-                height: 280,
+                height: 320,
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Colors.white, // Temadan bağımsız saf beyaz zemin
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.grey.shade300, width: 1.2),
-                  boxShadow: [
+                  border: Border.all(color: const Color(0xFFD1D5DB), width: 1.2),
+                  boxShadow: const [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.04),
+                      color: Color(0x0D000000),
                       blurRadius: 10,
-                      offset: const Offset(0, 4),
+                      offset: Offset(0, 3),
                     ),
                   ],
                 ),
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(14),
                 child: TextField(
                   controller: _textController,
                   maxLines: null,
                   expands: true,
+                  cursorColor: const Color(0xFF1E1E1E),
                   keyboardType: TextInputType.multiline,
-                  style: const TextStyle(fontSize: 14, color: Colors.black87, height: 1.45),
+                  // Yazı rengi temadan bağımsız net siyah
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    color: Color(0xFF1E1E1E),
+                    height: 1.5,
+                    fontFamily: 'sans-serif',
+                  ),
                   decoration: const InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white,
                     border: InputBorder.none,
-                    hintText: 'Çevrilen ses kayıtları buraya aktarılır. İstediğiniz gibi düzenleyebilir, yeni sesler ekleyip metinleri birleştirebilirsiniz...',
-                    hintStyle: TextStyle(color: Colors.black38, fontSize: 13),
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    contentPadding: EdgeInsets.zero,
+                    hintText: 'Çözümlenen ses metinleri bu alana aktarılır. Burayı dilediğiniz gibi düzenleyebilir, yeni sesler ekleyerek metinleri birleştirebilirsiniz...',
+                    hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
                   ),
                 ),
               ),
@@ -516,13 +596,13 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                     child: OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       onPressed: _textController.text.trim().isEmpty ? null : _saveAsTxtFile,
-                      icon: const Icon(Icons.description_outlined),
+                      icon: const Icon(Icons.description_outlined, size: 18),
                       label: const Text(
                         'TXT Olarak Kaydet',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
                       ),
                     ),
                   ),
@@ -531,13 +611,13 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       onPressed: _textController.text.trim().isEmpty ? null : _saveAsPdfFile,
-                      icon: const Icon(Icons.picture_as_pdf_rounded),
+                      icon: const Icon(Icons.picture_as_pdf_rounded, size: 18),
                       label: const Text(
                         'PDF Olarak Kaydet',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
                       ),
                     ),
                   ),
@@ -557,9 +637,9 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: hasAudio ? colorScheme.primary.withValues(alpha: 0.5) : colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: hasAudio ? colorScheme.primary.withValues(alpha: 0.4) : colorScheme.outlineVariant.withValues(alpha: 0.5),
         ),
       ),
       child: Column(
@@ -567,6 +647,10 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
           Row(
             children: [
               IconButton.filledTonal(
+                style: IconButton.styleFrom(
+                  backgroundColor: colorScheme.primary.withValues(alpha: 0.12),
+                  foregroundColor: colorScheme.primary,
+                ),
                 icon: Icon(hasAudio && _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded),
                 onPressed: hasAudio ? _togglePlayPause : null,
               ),
@@ -584,7 +668,7 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                     Text(
                       hasAudio
                           ? '${(_selectedAudioFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB • Dinlemek için oynatın'
-                          : 'Tüm formatlar desteklenir',
+                          : 'MP3, WAV, M4A, AAC, OGG (Maks. 500 MB)',
                       style: TextStyle(fontSize: 11, color: colorScheme.outline),
                     ),
                   ],
@@ -592,7 +676,7 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
               ),
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   visualDensity: VisualDensity.compact,
                 ),
                 onPressed: _isConverting ? null : _pickAudioFile,
@@ -605,8 +689,10 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
             const SizedBox(height: 6),
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                trackHeight: 2.5,
+                activeTrackColor: colorScheme.primary,
+                thumbColor: colorScheme.primary,
               ),
               child: Slider(
                 min: 0,
@@ -630,13 +716,13 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.teal.withValues(alpha: 0.1),
+          color: colorScheme.surfaceContainerLow,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.teal.withValues(alpha: 0.3)),
+          border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.5)),
         ),
         child: Row(
           children: [
-            const Icon(Icons.verified_rounded, color: Colors.teal, size: 24),
+            const Icon(Icons.verified_rounded, color: Color(0xFF16A34A), size: 22),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -647,15 +733,15 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                   ),
                   if (_isLoadingBalance)
-                    const Text('Kalan limit yükleniyor...', style: TextStyle(fontSize: 10.5, color: Colors.grey))
+                    Text('Bakiye sorgulanıyor...', style: TextStyle(fontSize: 10.5, color: colorScheme.outline))
                   else if (_remainingBalance != null)
                     Text(
                       'Kalan Kredi: \$${_remainingBalance!.toStringAsFixed(2)} (~$_remainingHours saat)',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.teal),
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF16A34A)),
                     )
                   else
                     Text(
-                      'Sınırsız format desteği devrede',
+                      'Tüm ses formatları destekleniyor',
                       style: TextStyle(fontSize: 10.5, color: colorScheme.outline),
                     ),
                 ],
@@ -678,13 +764,13 @@ class _AudioToTextScreenState extends State<AudioToTextScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.1),
+        color: const Color(0xFFD97706).withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+        border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.key_rounded, color: Colors.amber, size: 24),
+          const Icon(Icons.key_rounded, color: Color(0xFFD97706), size: 22),
           const SizedBox(width: 10),
           const Expanded(
             child: Text(

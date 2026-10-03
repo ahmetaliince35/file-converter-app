@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -5,10 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:pdfx/pdfx.dart' as px;
+
 import '../data/pdf_studio_service.dart';
 
 class PdfStudioScreen extends StatefulWidget {
-  const PdfStudioScreen({super.key});
+  final int initialTabIndex;
+
+  const PdfStudioScreen({super.key, this.initialTabIndex = 0});
 
   @override
   State<PdfStudioScreen> createState() => _PdfStudioScreenState();
@@ -28,14 +32,21 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
   final Set<int> _selectedPages = {};
   bool _isSplitting = false;
 
-  // Hızlı Ayıklama Önbelleği & Yükleme Kuyruğu
-  final Map<int, Uint8List> _splitThumbs = {};
+  // Bellek Patlamasını Önleyen Sınırlı LRU Küçük Resim Önbelleği (Maks. 36 sayfa)
+  final LinkedHashMap<int, Uint8List> _splitThumbs = LinkedHashMap<int, Uint8List>();
   final Set<int> _splitLoadingQueue = {};
+  int _activeRenderTasks = 0;
+  static const int _maxConcurrentRenders = 2;
+  static const int _maxCachedThumbs = 36;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(
+      length: 2,
+      vsync: this,
+      initialIndex: widget.initialTabIndex.clamp(0, 1),
+    );
   }
 
   @override
@@ -72,7 +83,7 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Dosya açılamadı: ${result.message}'),
-          backgroundColor: Colors.red.shade700,
+          backgroundColor: const Color(0xFFDC2626),
         ),
       );
     }
@@ -90,7 +101,7 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Birleştirme hatası: $e'), backgroundColor: Colors.red.shade800),
+          SnackBar(content: Text('Birleştirme hatası: $e'), backgroundColor: const Color(0xFFDC2626)),
         );
       }
     } finally {
@@ -98,7 +109,7 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
     }
   }
 
-  // ================= SAYFA AYIKLAMA =================
+  // ================= SAYFA AYIKLAMA (BELLEK KORUMALI) =================
   Future<void> _pickSplitFile() async {
     HapticFeedback.lightImpact();
     final result = await FilePicker.platform.pickFiles(
@@ -114,28 +125,41 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
       _splitThumbs.clear();
       _splitLoadingQueue.clear();
 
-      final doc = await px.PdfDocument.openFile(file.path);
+      try {
+        final doc = await px.PdfDocument.openFile(file.path);
 
-      setState(() {
-        _splitFile = file;
-        _splitPdfDoc = doc;
-        _splitTotalPages = doc.pagesCount;
-        _selectedPages.clear();
-      });
+        setState(() {
+          _splitFile = file;
+          _splitPdfDoc = doc;
+          _splitTotalPages = doc.pagesCount;
+          _selectedPages.clear();
+        });
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PDF açılamadı: $e'), backgroundColor: const Color(0xFFDC2626)),
+        );
+      }
     }
   }
 
+  /// Çok sayfalı (100+ sayfa) PDF'lerde eşzamanlı render ve bellek taşmasını önleyen kontrollü işleyici
   Future<void> _renderThumbnailIfNeeded(int pageIndex) async {
     if (_splitThumbs.containsKey(pageIndex) || _splitLoadingQueue.contains(pageIndex)) {
       return;
     }
     if (_splitPdfDoc == null) return;
 
+    if (_activeRenderTasks >= _maxConcurrentRenders) {
+      return; // Eşzamanlı render sınırına ulaşıldı, biraz sonra tekrar denenecek
+    }
+
     _splitLoadingQueue.add(pageIndex);
+    _activeRenderTasks++;
 
     try {
       final page = await _splitPdfDoc!.getPage(pageIndex + 1);
-      final double targetWidth = 140.0;
+      const double targetWidth = 130.0;
       final double targetHeight = (page.height / page.width) * targetWidth;
 
       final pageImg = await page.render(
@@ -147,12 +171,17 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
 
       if (pageImg != null && mounted) {
         setState(() {
+          // LRU Tahliye: Önbellek sınırını aştıysa en eski küçük resmi sil
+          if (_splitThumbs.length >= _maxCachedThumbs) {
+            _splitThumbs.remove(_splitThumbs.keys.first);
+          }
           _splitThumbs[pageIndex] = pageImg.bytes;
         });
       }
     } catch (e) {
       debugPrint('[SPLIT_THUMB_ERR] Sayfa $pageIndex: $e');
     } finally {
+      _activeRenderTasks--;
       _splitLoadingQueue.remove(pageIndex);
     }
   }
@@ -164,7 +193,7 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Aralık Seç', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        title: const Text('Aralık Seç', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
         content: Row(
           children: [
             Expanded(
@@ -220,7 +249,7 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ayıklama hatası: $e'), backgroundColor: Colors.red.shade800),
+          SnackBar(content: Text('Ayıklama hatası: $e'), backgroundColor: const Color(0xFFDC2626)),
         );
       }
     } finally {
@@ -234,15 +263,15 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('PDF Stüdyosu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        title: const Text('PDF Stüdyosu'),
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: colorScheme.primary,
-          indicatorWeight: 3,
+          indicatorWeight: 2.5,
           labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
           tabs: const [
-            Tab(icon: Icon(Icons.merge_type_rounded), text: 'PDF Birleştir'),
-            Tab(icon: Icon(Icons.call_split_rounded), text: 'Sayfa Ayıkla'),
+            Tab(icon: Icon(Icons.merge_type_rounded, size: 20), text: 'PDF Birleştir'),
+            Tab(icon: Icon(Icons.call_split_rounded, size: 20), text: 'Sayfa Ayıkla'),
           ],
         ),
       ),
@@ -256,7 +285,7 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
     );
   }
 
-  // --- 1. TAB: BİRLEŞTİRME (Listeye Dokununca Doğrudan Açılır) ---
+  // --- 1. TAB: BİRLEŞTİRME ---
   Widget _buildMergeTab(ColorScheme colorScheme) {
     if (_isMerging) {
       return const Center(
@@ -280,7 +309,7 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
             children: [
               Text(
                 'Birleştirilecek Belgeler (${_mergeFiles.length})',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
               ),
               FilledButton.tonalIcon(
                 onPressed: _pickMergeFiles,
@@ -296,12 +325,12 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.auto_awesome_motion_rounded, size: 56, color: colorScheme.outlineVariant),
+                Icon(Icons.auto_awesome_motion_rounded, size: 52, color: colorScheme.outlineVariant),
                 const SizedBox(height: 12),
-                const Text(
+                Text(
                   'En az 2 PDF ekleyin.\nBelgeye dokunarak içeriğini inceleyebilirsiniz.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey, height: 1.4),
+                  style: TextStyle(color: colorScheme.outline, height: 1.4, fontSize: 12.5),
                 ),
               ],
             ),
@@ -309,9 +338,8 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
               : ReorderableListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             itemCount: _mergeFiles.length,
-            onReorder: (oldIdx, newIdx) {
+            onReorderItem: (oldIdx, newIdx) {
               setState(() {
-                if (newIdx > oldIdx) newIdx -= 1;
                 final item = _mergeFiles.removeAt(oldIdx);
                 _mergeFiles.insert(newIdx, item);
               });
@@ -325,14 +353,14 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
+                  side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
                 ),
                 child: ListTile(
                   onTap: () => _viewPdfFile(f),
                   leading: CircleAvatar(
                     radius: 18,
-                    backgroundColor: Colors.red.withValues(alpha: 0.1),
-                    child: const Icon(Icons.picture_as_pdf_rounded, color: Colors.red, size: 20),
+                    backgroundColor: const Color(0xFFDC2626).withValues(alpha: 0.1),
+                    child: const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFFDC2626), size: 18),
                   ),
                   title: Text(
                     p.basename(f.path),
@@ -341,17 +369,17 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                   subtitle: Text(
-                    '${index + 1}. Belge • ${(f.lengthSync() / 1024).toStringAsFixed(1)} KB • İncelemek için dokunun',
-                    style: const TextStyle(fontSize: 11),
+                    '${index + 1}. Belge • ${(f.lengthSync() / 1024).toStringAsFixed(1)} KB',
+                    style: TextStyle(fontSize: 11, color: colorScheme.outline),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 18, color: Colors.grey),
+                        icon: Icon(Icons.close_rounded, size: 18, color: colorScheme.outline),
                         onPressed: () => setState(() => _mergeFiles.removeAt(index)),
                       ),
-                      const Icon(Icons.drag_handle_rounded, color: Colors.grey),
+                      Icon(Icons.drag_handle_rounded, color: colorScheme.outline, size: 20),
                     ],
                   ),
                 ),
@@ -366,8 +394,8 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
             height: 48,
             child: FilledButton.icon(
               onPressed: _mergeFiles.length >= 2 ? _handleMerge : null,
-              icon: const Icon(Icons.merge_type_rounded),
-              label: Text('${_mergeFiles.length} Dosyayı Birleştir', style: const TextStyle(fontWeight: FontWeight.bold)),
+              icon: const Icon(Icons.merge_type_rounded, size: 18),
+              label: Text('${_mergeFiles.length} Dosyayı Birleştir', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
             ),
           ),
         ),
@@ -395,18 +423,18 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.grid_view_rounded, size: 56, color: colorScheme.outlineVariant),
+            Icon(Icons.grid_view_rounded, size: 52, color: colorScheme.outlineVariant),
             const SizedBox(height: 14),
-            const Text(
+            Text(
               'Sayfalarını ayıklamak istediğiniz\nPDF dosyasını seçin',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey, height: 1.4),
+              style: TextStyle(color: colorScheme.outline, height: 1.4, fontSize: 12.5),
             ),
             const SizedBox(height: 18),
             FilledButton.icon(
               onPressed: _pickSplitFile,
-              icon: const Icon(Icons.upload_file_rounded),
-              label: const Text('PDF Dosyası Seç'),
+              icon: const Icon(Icons.upload_file_rounded, size: 18),
+              label: const Text('PDF Dosyası Seç', style: TextStyle(fontSize: 13)),
             ),
           ],
         ),
@@ -419,8 +447,9 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
           margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+            color: colorScheme.surfaceContainerLow,
             borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
           ),
           child: Row(
             children: [
@@ -490,11 +519,11 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: colorScheme.surfaceContainerLow,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: isSelected ? colorScheme.primary : colorScheme.outlineVariant.withValues(alpha: 0.35),
-                      width: isSelected ? 2.5 : 1,
+                      color: isSelected ? colorScheme.primary : colorScheme.outlineVariant.withValues(alpha: 0.4),
+                      width: isSelected ? 2.0 : 1.0,
                     ),
                   ),
                   clipBehavior: Clip.antiAlias,
@@ -505,14 +534,14 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
                         Image.memory(thumbBytes, fit: BoxFit.cover, gaplessPlayback: true)
                       else
                         Container(
-                          color: Colors.grey.shade100,
+                          color: colorScheme.surfaceContainerLow,
                           child: Center(
                             child: Text(
                               '${index + 1}',
                               style: TextStyle(
-                                fontSize: 16,
+                                fontSize: 15,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.grey.shade400,
+                                color: colorScheme.outline,
                               ),
                             ),
                           ),
@@ -521,14 +550,14 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
                         top: 6,
                         left: 6,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.65),
-                            borderRadius: BorderRadius.circular(6),
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
                             '${index + 1}',
-                            style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
                           ),
                         ),
                       ),
@@ -536,12 +565,12 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
                         top: 6,
                         right: 6,
                         child: CircleAvatar(
-                          radius: 11,
-                          backgroundColor: isSelected ? colorScheme.primary : Colors.black26,
+                          radius: 10,
+                          backgroundColor: isSelected ? colorScheme.primary : Colors.black38,
                           child: Icon(
                             isSelected ? Icons.check_rounded : Icons.circle_outlined,
                             color: Colors.white,
-                            size: 14,
+                            size: 13,
                           ),
                         ),
                       ),
@@ -559,8 +588,8 @@ class _PdfStudioScreenState extends State<PdfStudioScreen> with SingleTickerProv
             height: 48,
             child: FilledButton.icon(
               onPressed: _selectedPages.isNotEmpty ? _handleSplit : null,
-              icon: const Icon(Icons.call_split_rounded),
-              label: Text('${_selectedPages.length} Sayfayı Yeni PDF Yap', style: const TextStyle(fontWeight: FontWeight.bold)),
+              icon: const Icon(Icons.call_split_rounded, size: 18),
+              label: Text('${_selectedPages.length} Sayfayı Yeni PDF Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
             ),
           ),
         ),

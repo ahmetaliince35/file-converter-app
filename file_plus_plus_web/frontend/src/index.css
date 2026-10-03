@@ -1,12 +1,94 @@
 @import "tailwindcss";
 
-body {
-  background-color: #020617;
-  color: #f8fafc;
-  min-height: 100vh;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+:root {
+  /* Açık Tema: Sıcak keten / kağıt dokusu (gözü yormaz, parlama yapmaz) */
+  --bg-page: #F7F6F2;
+  --bg-card: #FFFFFF;
+  --bg-card-subtle: #EFECE5;
+  --bg-surface-high: #E6E3DA;
+  --border-main: #E2DFD6;
+  --border-subtle: rgba(226, 223, 214, 0.7);
+  --text-main: #1A1D23;
+  --text-muted: #626773;
+  --text-subtle: #8C92A0;
+  
+  --primary: #3858C7;
+  --primary-hover: #2E4AA8;
+  --primary-container: #E5EAFC;
+  --primary-on-container: #1B2C68;
+  --primary-glow: rgba(56, 88, 199, 0.12);
+  
+  --shadow-card: 0 4px 20px -2px rgba(30, 34, 45, 0.05), 0 1px 3px rgba(30, 34, 45, 0.04);
+  --shadow-dock: 0 10px 30px -4px rgba(30, 34, 45, 0.08), 0 2px 6px rgba(30, 34, 45, 0.04);
 }
+
+html.dark {
+  /* Koyu Tema: Rafine, derin mat obsidyen / titanyum zemin, sıfır M3 çamurlu morluk */
+  --bg-page: #0D0E12;
+  --bg-card: #161821;
+  --bg-card-subtle: #1E222D;
+  --bg-surface-high: #242835;
+  --border-main: #2A2F3D;
+  --border-subtle: rgba(42, 47, 61, 0.7);
+  --text-main: #F3F4F6;
+  --text-muted: #98A0B2;
+  --text-subtle: #6B7280;
+  
+  --primary: #5A79E8;
+  --primary-hover: #6D8BF0;
+  --primary-container: #1E284A;
+  --primary-on-container: #D6E2FF;
+  --primary-glow: rgba(90, 121, 232, 0.16);
+
+  --shadow-card: 0 4px 24px -2px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.25);
+  --shadow-dock: 0 12px 36px -4px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-main);
+  min-height: 100vh;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Rafine Özelleştirilmiş Kaydırma Çubuğu */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border-main);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--text-subtle);
+}
+
 @keyframes indeterminate {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(200%); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 4s infinite ease-in-out;
 }

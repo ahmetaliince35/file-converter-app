@@ -159,28 +159,28 @@ export default function ImagesToPdfTool({ setLoading }) {
   const estimatedPages = files.length > 0 ? Math.ceil(files.length / itemsPerPage) : 0;
 
   return (
-    <div className="flex flex-col gap-5 max-w-3xl mx-auto w-full">
-      <div className="flex items-start justify-between border-b border-slate-800/80 pb-4">
+    <div className="flex flex-col gap-5 max-w-3xl mx-auto w-full transition-colors duration-200">
+      <div className="flex items-start justify-between border-b border-[var(--border-subtle)] pb-4">
         <div>
-          <h2 className="text-lg font-semibold text-slate-100 flex items-center gap-2.5">
-            <span className="p-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400">
+          <h2 className="text-lg font-bold text-[var(--text-main)] flex items-center gap-2.5 font-display">
+            <span className="p-2 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-sky-500">
               <LayoutGrid className="w-5 h-5" />
             </span>
             A4 Resim Yerleşim Matrisi
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-[var(--text-muted)] mt-1">
             Görselleri oranlarını koruyarak A4 sayfalarına sırayla yerleştirin.
           </p>
         </div>
       </div>
 
       <div className="flex flex-col gap-2">
-        <label className="text-xs font-medium text-slate-400 flex items-center justify-between">
+        <label className="text-xs font-semibold text-[var(--text-main)] flex items-center justify-between">
           <span className="flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-sky-400" /> Yerleşim Şablonu
+            <Layers className="w-3.5 h-3.5 text-sky-500" /> Yerleşim Şablonu
           </span>
           {files.length > 0 && (
-            <span className="text-[11px] text-sky-400 font-mono flex items-center gap-1">
+            <span className="text-[11px] text-sky-500 font-mono flex items-center gap-1 font-bold">
               <FileCheck className="w-3.5 h-3.5" />
               Tahmini: {estimatedPages} Sayfa ({files.length} Görsel)
             </span>
@@ -195,15 +195,15 @@ export default function ImagesToPdfTool({ setLoading }) {
                 key={opt.id}
                 type="button"
                 onClick={() => setMatrix(opt.id)}
-                className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all duration-150 ${
+                className={`p-3 rounded-2xl border flex flex-col items-center gap-2 transition-all duration-150 cursor-pointer ${
                   isSelected
-                    ? 'bg-sky-500/10 border-sky-500 text-sky-400 shadow-md shadow-sky-500/10'
-                    : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:bg-slate-800/60 hover:text-slate-200 hover:border-slate-700'
+                    ? 'bg-sky-500/10 border-sky-500 text-sky-500 shadow-xs'
+                    : 'bg-[var(--bg-card-subtle)] border-[var(--border-main)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:border-[var(--border-focus)]'
                 }`}
               >
                 <div
-                  className={`w-9 h-12 rounded border p-0.5 grid gap-0.5 transition ${
-                    isSelected ? 'border-sky-400 bg-slate-950' : 'border-slate-700 bg-slate-950/70'
+                  className={`w-9 h-12 rounded-lg border p-0.5 grid gap-0.5 transition ${
+                    isSelected ? 'border-sky-500 bg-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'
                   }`}
                   style={{
                     gridTemplateColumns: `repeat(${opt.cols}, minmax(0, 1fr))`,
@@ -214,17 +214,17 @@ export default function ImagesToPdfTool({ setLoading }) {
                     <div
                       key={i}
                       className={`rounded-[1px] ${
-                        isSelected ? 'bg-sky-500/40' : 'bg-slate-800'
+                        isSelected ? 'bg-sky-500/50' : 'bg-[var(--border-main)]'
                       }`}
                     />
                   ))}
                 </div>
 
                 <div className="text-center">
-                  <div className={`text-xs font-semibold ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                  <div className={`text-xs font-bold ${isSelected ? 'text-sky-500' : 'text-[var(--text-main)]'}`}>
                     {opt.title}
                   </div>
-                  <div className="text-[10px] text-slate-500 mt-0.5 line-clamp-1">
+                  <div className="text-[10px] text-[var(--text-muted)] mt-0.5 line-clamp-1 font-medium">
                     {opt.desc}
                   </div>
                 </div>
@@ -236,21 +236,21 @@ export default function ImagesToPdfTool({ setLoading }) {
 
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-2xl p-7 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2.5 ${
+        className={`border-2 border-dashed rounded-3xl p-8 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2.5 ${
           isDragActive
             ? 'border-sky-500 bg-sky-500/10 scale-[0.99]'
-            : 'border-slate-800 hover:border-slate-700 bg-slate-900/30 hover:bg-slate-900/50'
+            : 'border-[var(--border-main)] hover:border-sky-500/50 bg-[var(--bg-card-subtle)] hover:bg-[var(--bg-card)]'
         }`}
       >
         <input {...getInputProps()} />
-        <div className="p-3 rounded-full bg-slate-800/80 border border-slate-700/50 text-sky-400 shadow-inner">
+        <div className="p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-main)] text-sky-500 shadow-xs">
           <UploadCloud className="w-6 h-6" />
         </div>
         <div>
-          <p className="text-xs font-medium text-slate-200">
-            Resimleri buraya sürükleyin veya <span className="text-sky-400 underline">seçin</span>
+          <p className="text-xs font-semibold text-[var(--text-main)]">
+            Resimleri buraya sürükleyin veya <span className="text-sky-500 underline underline-offset-4">seçin</span>
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
+          <p className="text-[11px] text-[var(--text-muted)] mt-1 font-mono">
             JPG, PNG, WEBP, BMP (Çoklu Seçim • Maks. 1024 MB)
           </p>
         </div>

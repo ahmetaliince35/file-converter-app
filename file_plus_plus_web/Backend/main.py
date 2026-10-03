@@ -41,7 +41,7 @@ app.add_middleware(
 
 TEMP_DIR = "temp_storage"
 os.makedirs(TEMP_DIR, exist_ok=True)
-MAX_BATCH_SIZE = 100 * 1024 * 1024  # 100 MB
+MAX_BATCH_SIZE = 1000 * 1024 * 1024  # 100 MB
 
 
 def cleanup(path: str):
@@ -113,7 +113,7 @@ async def convert_batch(
         out_pdf = os.path.join(session_dir, f"FilePlus_Merged_{session_id[:6]}.pdf")
         merge_pdfs(pdf_paths, out_pdf)
         background_tasks.add_task(cleanup, session_dir)
-        return FileResponse(out_pdf, filename="FilePlus_Merged.pdf")
+        return FileResponse(out_pdf, filename="FilePlus_Merged.pdf", media_type="application/pdf")
 
     if target_format == "zip":
         out_zip = os.path.join(session_dir, f"FilePlus_Archive_{session_id[:6]}.zip")

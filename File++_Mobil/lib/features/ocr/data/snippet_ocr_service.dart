@@ -13,9 +13,9 @@ class SnippetOcrService {
       uiSettings: [
         AndroidUiSettings(
           toolbarTitle: 'Metin Alanını Seçin',
-          toolbarColor: const Color(0xFF00796B),
+          toolbarColor: const Color(0xFF1C1D22),
           toolbarWidgetColor: Colors.white,
-          activeControlsWidgetColor: const Color(0xFF00796B),
+          activeControlsWidgetColor: const Color(0xFF6366F1),
           initAspectRatio: CropAspectRatioPreset.original,
           lockAspectRatio: false, // Serbest dikdörtgen seçimi
         ),

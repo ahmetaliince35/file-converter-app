@@ -5,8 +5,17 @@ import 'package:path_provider/path_provider.dart';
 class TempFileManager {
   static const String _folderName = 'converter_cache';
 
+  @visibleForTesting
+  static Directory? overrideWorkingDir;
+
   /// Sadece uygulamaya özel çalışma klasörü
   static Future<Directory> get workingDir async {
+    if (overrideWorkingDir != null) {
+      if (!await overrideWorkingDir!.exists()) {
+        await overrideWorkingDir!.create(recursive: true);
+      }
+      return overrideWorkingDir!;
+    }
     final baseDir = await getTemporaryDirectory();
     final dir = Directory('${baseDir.path}/$_folderName');
     if (!await dir.exists()) {
