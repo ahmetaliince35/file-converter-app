@@ -70,13 +70,22 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>All Files</string>
+			<string>Supported Documents</string>
 			<key>LSHandlerRank</key>
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>public.data</string>
-				<string>public.content</string>
+				<string>public.image</string>
+				<string>public.audio</string>
+				<string>public.text</string>
+				<string>public.plain-text</string>
+				<string>com.microsoft.word.doc</string>
+				<string>org.openxmlformats.wordprocessingml.document</string>
+				<string>com.microsoft.excel.xls</string>
+				<string>org.openxmlformats.spreadsheetml.sheet</string>
+				<string>com.microsoft.powerpoint.ppt</string>
+				<string>org.openxmlformats.presentationml.presentation</string>
+				<string>public.zip-archive</string>
 			</array>
 		</dict>
 	</array>

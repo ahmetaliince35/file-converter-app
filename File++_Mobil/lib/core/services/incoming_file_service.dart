@@ -90,6 +90,11 @@ class IncomingFileService {
     for (final rawPath in rawPaths) {
       final file = _sanitizeToFile(rawPath);
       if (file != null) {
+        // PDF ve video dosyaları dışarıdan birlikte aç için engellenir
+        if (_isVideoFile(file.path) || _isPdfFile(file.path)) {
+          debugPrint('IncomingFileService: PDF veya Video dosyası filtrelendi -> ${file.path}');
+          continue;
+        }
         validFiles.add(file);
       }
     }
@@ -140,6 +145,7 @@ class IncomingFileService {
 
     // 3. Belgeler, kodlar, arşivler ve diğerleri -> Evrensel Dönüştürücü
     final targetFile = files.first;
+
     await _navigateToScreen(UniversalConverterScreen(initialFile: targetFile));
     _showSuccessFeedback('${p.basename(targetFile.path)} stüdyoya yüklendi');
   }
@@ -202,6 +208,17 @@ class IncomingFileService {
     final ext = p.extension(path).replaceFirst('.', '').toLowerCase();
     const audioExtensions = {'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma', 'webm'};
     return audioExtensions.contains(ext);
+  }
+
+  static bool _isVideoFile(String path) {
+    final ext = p.extension(path).replaceFirst('.', '').toLowerCase();
+    const videoExtensions = {'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', '3gp', 'm4v', 'mpeg', 'mpg'};
+    return videoExtensions.contains(ext);
+  }
+
+  static bool _isPdfFile(String path) {
+    final ext = p.extension(path).replaceFirst('.', '').toLowerCase();
+    return ext == 'pdf';
   }
 
   void dispose() {

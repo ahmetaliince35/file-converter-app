@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:excel/excel.dart' as ex;
 import 'package:flutter/foundation.dart';
@@ -170,7 +171,52 @@ class UniversalConverterService {
     FileFormatCategory category, {
     void Function(double, String)? onProgress,
   }) async {
-    onProgress?.call(0.1, 'Dosya okunuyor ve metin ayıklanıyor...');
+    onProgress?.call(0.1, 'Dosya hazırlanıyor...');
+    final workingDir = await TempFileManager.workingDir;
+    final baseName = p.basenameWithoutExtension(file.path);
+    final outPath = p.join(
+      workingDir.path,
+      '${baseName}_metin_${DateTime.now().millisecondsSinceEpoch}.txt',
+    );
+    final outFile = File(outPath);
+
+    // Eğer kaynak zaten metin/kod ise, tüm dosyayı belleğe string olarak alıp şişirmek yerine
+    // doğrudan stream chunk'ları ile adım adım aktar ve anlık MB/yüzde bilgisini progress bar'a yansıt
+    if (category == FileFormatCategory.textOrCode) {
+      final totalBytes = await file.length();
+      int processedBytes = 0;
+      final reader = file.openRead();
+      final sink = outFile.openWrite();
+      int lastReportedPct = -1;
+      final mbTotal = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+
+      onProgress?.call(0.05, 'Adım adım belleğe aktarılıyor: 0.0 MB / $mbTotal MB (%0)...');
+
+      await for (final chunk in reader) {
+        sink.add(chunk);
+        processedBytes += chunk.length;
+
+        final ratio = totalBytes > 0 ? (processedBytes / totalBytes).clamp(0.0, 1.0) : 0.5;
+        final pct = (ratio * 100).toInt();
+
+        if (pct != lastReportedPct) {
+          lastReportedPct = pct;
+          final mbRead = (processedBytes / (1024 * 1024)).toStringAsFixed(1);
+          onProgress?.call(
+            ratio,
+            'Adım adım belleğe aktarılıyor: $mbRead MB / $mbTotal MB (%$pct)',
+          );
+        }
+      }
+
+      onProgress?.call(0.98, 'Diske yazılıyor ve tamamlanıyor...');
+      await sink.flush();
+      await sink.close();
+      onProgress?.call(1.0, 'Dönüşüm tamamlandı! (%100)');
+      return outFile;
+    }
+
+    onProgress?.call(0.2, 'İçerik taranıyor ve metin ayıklanıyor...');
     String extractedText = '';
 
     switch (category) {
@@ -211,13 +257,6 @@ class UniversalConverterService {
     }
 
     onProgress?.call(0.9, 'TXT dosyası kaydediliyor...');
-    final workingDir = await TempFileManager.workingDir;
-    final baseName = p.basenameWithoutExtension(file.path);
-    final outPath = p.join(
-      workingDir.path,
-      '${baseName}_metin_${DateTime.now().millisecondsSinceEpoch}.txt',
-    );
-    final outFile = File(outPath);
     await outFile.writeAsString(extractedText, flush: true);
     onProgress?.call(1.0, 'Tamamlandı!');
 
@@ -260,11 +299,25 @@ class UniversalConverterService {
       }
     }
 
-    // 3. Metin, kod veya yerel fallback: Önce metni çıkar ardından şık bir A4 PDF oluştur
+    // 3. Metin veya kaynak kod dosyaları: Doğrudan akış (stream) ile satır satır okuyup
+    // sıfır bellek tüketimiyle hızlı A4 sayfalandırma uygula (4-5 dakikalık layout donmasını ve çöküşü önler)
+    if (category == FileFormatCategory.textOrCode) {
+      final baseName = p.basename(file.path);
+      final ext = _getExtension(file);
+      final isCode = codeExtensions.contains(ext);
+      return _generatePdfFromTextOrCodeStream(
+        file: file,
+        title: baseName,
+        isCode: isCode,
+        onProgress: onProgress,
+      );
+    }
+
+    // 4. Diğer belgeler (Office yerel fallback veya PDF metinleri)
     onProgress?.call(0.2, 'Dosya içeriği okunuyor...');
     final text = await _extractContentAsText(file, category);
 
-    onProgress?.call(0.6, 'A4 PDF sayfalandırması ve tipografi hazırlanıyor...');
+    onProgress?.call(0.5, 'A4 PDF sayfalandırması ve tipografi hazırlanıyor...');
     final baseName = p.basename(file.path);
     final ext = _getExtension(file);
     final isCode = codeExtensions.contains(ext);
@@ -283,11 +336,13 @@ class UniversalConverterService {
   static Future<String> _readTextOrCodeFile(File file) async {
     try {
       final size = await file.length();
-      // 30 MB üzeri devasa metin dosyalarında bellek patlamasını önle
-      if (size > 30 * 1024 * 1024) {
-        final stream = file.openRead(0, 15 * 1024 * 1024);
-        final bytes = await stream.expand((b) => b).toList();
-        return '${decodeTextBytes(bytes)}\n\n... [Dosya 30 MB üzerinde olduğu için performans güvenliği adına ilk 15 MB metne dönüştürülmüştür] ...';
+      // 3 MB üzeri büyük metin dosyalarında bellek patlamasını önle (3 MB ~60.000 satırdır)
+      if (size > 3 * 1024 * 1024) {
+        final builder = BytesBuilder(copy: false);
+        await for (final chunk in file.openRead(0, 3 * 1024 * 1024)) {
+          builder.add(chunk);
+        }
+        return '${decodeTextBytes(builder.takeBytes())}\n\n... [Dosya boyutu çok büyük olduğu için mobil bellek güvenliği adına ilk 3 MB metne dönüştürülmüştür] ...';
       }
 
       final bytes = await file.readAsBytes();
@@ -350,12 +405,7 @@ class UniversalConverterService {
 
   static Future<String> _extractTextFromPdf(File file) async {
     try {
-      final bytes = await file.readAsBytes();
-      final document = sf_pdf.PdfDocument(inputBytes: bytes);
-      final textExtractor = sf_pdf.PdfTextExtractor(document);
-      final text = textExtractor.extractText();
-      document.dispose();
-      return text;
+      return await compute(_extractPdfWorker, file.path);
     } catch (e) {
       debugPrint('PDF metin çıkarma hatası: $e');
       return 'PDF metni okunamadı: $e';
@@ -364,32 +414,7 @@ class UniversalConverterService {
 
   static Future<String> _extractTextFromDocx(File file) async {
     try {
-      final bytes = await file.readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
-      final docFile = archive.findFile('word/document.xml');
-
-      if (docFile == null) return 'Word belgesi içeriği bulunamadı.';
-
-      final xmlString = utf8.decode(docFile.content as List<int>);
-      final document = XmlDocument.parse(xmlString);
-
-      final buffer = StringBuffer();
-      final paragraphs = document.findAllElements('w:p');
-
-      int pCount = 0;
-      for (final p in paragraphs) {
-        final texts = p.findAllElements('w:t').map((e) => e.innerText).join();
-        if (texts.trim().isNotEmpty) {
-          buffer.writeln(texts);
-          pCount++;
-          if (pCount > 20000) {
-            buffer.writeln('\n... [Çok büyük Word belgesi: İlk 20.000 paragraf ayıklandı] ...');
-            break;
-          }
-        }
-      }
-
-      return buffer.toString().trim();
+      return await compute(_extractDocxWorker, file.path);
     } catch (e) {
       return 'DOCX metni ayıklanamadı: $e';
     }
@@ -397,33 +422,7 @@ class UniversalConverterService {
 
   static Future<String> _extractTextFromExcel(File file) async {
     try {
-      final bytes = await file.readAsBytes();
-      final excel = ex.Excel.decodeBytes(bytes);
-      final buffer = StringBuffer();
-
-      for (final table in excel.tables.keys) {
-        final sheet = excel.tables[table]!;
-        buffer.writeln('=== SAYFA: $table ===');
-
-        int rowCount = 0;
-        for (final row in sheet.rows) {
-          final rowString = row
-              .map((cell) => cell?.value?.toString().trim() ?? '')
-              .join(' | ');
-          if (rowString.replaceAll('|', '').trim().isNotEmpty) {
-            buffer.writeln(rowString);
-            rowCount++;
-            // 5000 satırdan büyük sayfalarda bellek patlamasını önle
-            if (rowCount > 5000) {
-              buffer.writeln('... [Sayfada 5.000\'den fazla satır var. Performans için ilk 5.000 satır alındı] ...');
-              break;
-            }
-          }
-        }
-        buffer.writeln();
-      }
-
-      return buffer.toString().trim();
+      return await compute(_extractExcelWorker, file.path);
     } catch (e) {
       return 'Excel verisi okunamadı: $e';
     }
@@ -431,30 +430,7 @@ class UniversalConverterService {
 
   static Future<String> _extractTextFromPptx(File file) async {
     try {
-      final bytes = await file.readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
-      final buffer = StringBuffer();
-
-      int slideIndex = 1;
-      while (slideIndex <= 300) {
-        final slideFile = archive.findFile('ppt/slides/slide$slideIndex.xml');
-        if (slideFile == null) break;
-
-        final xmlString = utf8.decode(slideFile.content as List<int>);
-        final document = XmlDocument.parse(xmlString);
-
-        buffer.writeln('=== SLAYT $slideIndex ===');
-        final texts = document.findAllElements('a:t').map((e) => e.innerText);
-        for (final text in texts) {
-          if (text.trim().isNotEmpty) {
-            buffer.writeln(text);
-          }
-        }
-        buffer.writeln();
-        slideIndex++;
-      }
-
-      return buffer.toString().trim();
+      return await compute(_extractPptxWorker, file.path);
     } catch (e) {
       return 'PowerPoint metinleri okunamadı: $e';
     }
@@ -479,170 +455,182 @@ class UniversalConverterService {
     }
   }
 
-  /// Bellek korumalı ve parçalı MultiPage A4 PDF motoru (Crash ve TooManyPagesException önler)
-  static Future<File> _generateStyledPdfFromText({
+  /// Büyük metin ve kaynak kod dosyalarını satır satır akışla okuyup
+  /// sıfır bellek tüketimi ve anlık ilerleme bildirimiyle A4 PDF'e dönüştürür.
+  static Future<File> _generatePdfFromTextOrCodeStream({
+    required File file,
     required String title,
-    required String content,
     bool isCode = false,
     void Function(double, String)? onProgress,
   }) async {
     final pdf = pw.Document();
+    final fileSize = await file.length();
+    final fileSizeMb = (fileSize / (1024 * 1024)).toStringAsFixed(1);
+
+    onProgress?.call(0.05, 'Yazı tipi ve sayfa yapısı hazırlanıyor...');
 
     pw.Font fontRegular;
     pw.Font fontBold;
 
     if (isCode) {
       try {
-        fontRegular = await PdfGoogleFonts.robotoMonoRegular();
-        fontBold = await PdfGoogleFonts.robotoMonoBold();
+        fontRegular = await PdfGoogleFonts.robotoMonoRegular().timeout(const Duration(seconds: 2));
+        fontBold = await PdfGoogleFonts.robotoMonoBold().timeout(const Duration(seconds: 2));
       } catch (_) {
         fontRegular = pw.Font.courier();
         fontBold = pw.Font.courierBold();
       }
     } else {
       try {
-        fontRegular = await PdfGoogleFonts.robotoRegular();
-        fontBold = await PdfGoogleFonts.robotoBold();
+        fontRegular = await PdfGoogleFonts.robotoRegular().timeout(const Duration(seconds: 2));
+        fontBold = await PdfGoogleFonts.robotoBold().timeout(const Duration(seconds: 2));
       } catch (_) {
         fontRegular = pw.Font.helvetica();
         fontBold = pw.Font.helveticaBold();
       }
     }
 
-    final rawLines = content.split('\n');
-    final totalLines = rawLines.length;
+    onProgress?.call(0.1, 'Satırlar adım adım taranıyor ($fileSizeMb MB)...');
 
-    // Çok büyük metinlerde (10.000 satırdan fazla) bellek taşmasını önle
-    final linesToProcess = totalLines > 10000 ? rawLines.sublist(0, 10000) : rawLines;
-    final isTruncated = totalLines > 10000;
+    const int linesPerPage = 42;
+    const int maxPages = 40; // Mobil cihaz bellek güvenliği için 40 sayfa (~1.680 satır)
 
-    // Tek bir devasa String yerine satırları 60'arlı paragraflar halinde gruplayarak layout motorunu koru
-    final contentWidgets = <pw.Widget>[];
+    final pageLinesList = <List<String>>[];
+    var currentBatch = <String>[];
+    int totalLinesRead = 0;
+    bool isTruncated = false;
 
-    contentWidgets.add(
-      pw.Header(
-        level: 0,
-        child: pw.Row(
-          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-          children: [
-            pw.Text(
-              title,
-              style: pw.TextStyle(
-                font: fontBold,
-                fontSize: 13,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.blueGrey900,
-              ),
-            ),
-            if (isCode)
-              pw.Container(
-                padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: pw.BoxDecoration(
-                  color: PdfColors.blueGrey50,
-                  borderRadius: pw.BorderRadius.circular(4),
-                  border: pw.Border.all(color: PdfColors.blueGrey200, width: 0.5),
-                ),
-                child: pw.Text(
-                  'KAYNAK KODU',
-                  style: pw.TextStyle(font: fontBold, fontSize: 8, color: PdfColors.blueGrey800),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-    contentWidgets.add(pw.SizedBox(height: 6));
+    final lineStream = file
+        .openRead()
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .transform(const LineSplitter());
 
-    const int chunkSize = 60;
-    for (int i = 0; i < linesToProcess.length; i += chunkSize) {
-      final end = (i + chunkSize < linesToProcess.length) ? i + chunkSize : linesToProcess.length;
-      final chunkBuffer = StringBuffer();
-
-      for (int lineIdx = i; lineIdx < end; lineIdx++) {
-        final lineStr = linesToProcess[lineIdx].replaceAll('\r', '');
+    try {
+      await for (final line in lineStream) {
+        totalLinesRead++;
+        final cleanLine = line.replaceAll('\r', '');
         if (isCode) {
-          final lineNum = '${lineIdx + 1}'.padLeft(4, ' ');
-          chunkBuffer.writeln('$lineNum | $lineStr');
+          final lineNum = '$totalLinesRead'.padLeft(4, ' ');
+          currentBatch.add('$lineNum | $cleanLine');
         } else {
-          chunkBuffer.writeln(lineStr);
+          currentBatch.add(cleanLine);
+        }
+
+        if (currentBatch.length >= linesPerPage) {
+          pageLinesList.add(List.unmodifiable(currentBatch));
+          currentBatch = <String>[];
+          final currentPages = pageLinesList.length;
+          onProgress?.call(
+            0.1 + (0.3 * (currentPages / maxPages).clamp(0.0, 1.0)),
+            'Sayfalar taranıyor: $currentPages sayfa ($totalLinesRead satır)...',
+          );
+          if (pageLinesList.length >= maxPages) {
+            isTruncated = true;
+            break;
+          }
         }
       }
-
-      contentWidgets.add(
-        pw.Paragraph(
-          text: chunkBuffer.toString().trimRight(),
-          style: pw.TextStyle(
-            font: fontRegular,
-            fontSize: isCode ? 7.5 : 9.5,
-            lineSpacing: isCode ? 1.4 : 2.4,
-            color: PdfColors.grey900,
-          ),
-        ),
-      );
+      if (currentBatch.isNotEmpty && pageLinesList.length < maxPages) {
+        pageLinesList.add(currentBatch);
+      }
+    } catch (e) {
+      debugPrint('Akış okuma uyarısı: $e');
     }
 
-    if (isTruncated) {
-      contentWidgets.add(
-        pw.Container(
-          margin: const pw.EdgeInsets.only(top: 12),
-          padding: const pw.EdgeInsets.all(8),
-          decoration: pw.BoxDecoration(
-            color: PdfColors.amber50,
-            borderRadius: pw.BorderRadius.circular(6),
-            border: pw.Border.all(color: PdfColors.amber300, width: 0.5),
-          ),
-          child: pw.Text(
-            '[Bu dosya çok büyük olduğu için performans ve bellek güvenliği adına ilk 10.000 satır derlenmiştir. Kalan $totalLines satır için dosya bölme araçlarını kullanabilirsiniz.]',
-            style: pw.TextStyle(font: fontRegular, fontSize: 8, color: PdfColors.amber900),
-          ),
-        ),
-      );
-    }
+    final totalPages = pageLinesList.isEmpty ? 1 : pageLinesList.length;
 
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        maxPages: 2000, // Varsayılan 100 limitini 2000'e çıkararak TooManyPagesException crash'ini engeller
-        margin: const pw.EdgeInsets.symmetric(horizontal: 32, vertical: 36),
-        theme: pw.ThemeData.withFont(base: fontRegular, bold: fontBold),
-        header: (pw.Context context) {
-          return pw.Container(
-            alignment: pw.Alignment.centerLeft,
-            margin: const pw.EdgeInsets.only(bottom: 10),
-            padding: const pw.EdgeInsets.only(bottom: 4),
-            decoration: const pw.BoxDecoration(
-              border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5)),
-            ),
-            child: pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+    for (int pIdx = 0; pIdx < pageLinesList.length; pIdx++) {
+      final pageNum = pIdx + 1;
+      final lines = pageLinesList[pIdx];
+      final isLastPage = pageNum == totalPages;
+
+      onProgress?.call(
+        0.4 + (0.5 * (pageNum / totalPages)),
+        'PDF Sayfası Hazırlanıyor: $pageNum / $totalPages (%${((pageNum / totalPages) * 100).toInt()})...',
+      );
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.symmetric(horizontal: 28, vertical: 30),
+          build: (pw.Context context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
-                pw.Text(
-                  title,
-                  style: pw.TextStyle(font: fontBold, fontSize: 9, color: PdfColors.grey700),
+                pw.Container(
+                  padding: const pw.EdgeInsets.only(bottom: 6),
+                  decoration: const pw.BoxDecoration(
+                    border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5)),
+                  ),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text(
+                        title,
+                        style: pw.TextStyle(font: fontBold, fontSize: 9, color: PdfColors.blueGrey800),
+                      ),
+                      pw.Text(
+                        isCode ? 'File++ Kaynak Kodu' : 'File++ Belge Stüdyosu',
+                        style: pw.TextStyle(font: fontRegular, fontSize: 8, color: PdfColors.grey600),
+                      ),
+                    ],
+                  ),
                 ),
-                pw.Text(
-                  isCode ? 'File++ Kaynak Kodu' : 'File++ Belge Stüdyosu',
-                  style: pw.TextStyle(font: fontRegular, fontSize: 8, color: PdfColors.grey500),
+                pw.SizedBox(height: 8),
+                pw.Expanded(
+                  child: pw.Text(
+                    lines.join('\n'),
+                    style: pw.TextStyle(
+                      font: fontRegular,
+                      fontSize: isCode ? 7.2 : 9.0,
+                      lineSpacing: isCode ? 1.3 : 1.7,
+                      color: PdfColors.grey900,
+                    ),
+                  ),
+                ),
+                if (isLastPage && isTruncated) ...[
+                  pw.SizedBox(height: 4),
+                  pw.Container(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: pw.BoxDecoration(
+                      color: PdfColors.amber50,
+                      borderRadius: pw.BorderRadius.circular(4),
+                      border: pw.Border.all(color: PdfColors.amber300, width: 0.5),
+                    ),
+                    child: pw.Text(
+                      '[Bu büyük dosya ($fileSizeMb MB) için ilk $totalLinesRead satır ($totalPages sayfa) PDF olarak derlenmiştir. Dosyanın tamamına TXT formatına dönüştürerek erişebilirsiniz.]',
+                      style: pw.TextStyle(font: fontRegular, fontSize: 7.5, color: PdfColors.amber900),
+                    ),
+                  ),
+                ],
+                pw.SizedBox(height: 6),
+                pw.Container(
+                  padding: const pw.EdgeInsets.only(top: 4),
+                  decoration: const pw.BoxDecoration(
+                    border: pw.Border(top: pw.BorderSide(color: PdfColors.grey200, width: 0.5)),
+                  ),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text(
+                        'File++',
+                        style: pw.TextStyle(font: fontRegular, fontSize: 7.5, color: PdfColors.grey400),
+                      ),
+                      pw.Text(
+                        'Sayfa $pageNum / $totalPages',
+                        style: pw.TextStyle(font: fontRegular, fontSize: 7.5, color: PdfColors.grey600),
+                      ),
+                    ],
+                  ),
                 ),
               ],
-            ),
-          );
-        },
-        footer: (pw.Context context) {
-          return pw.Container(
-            alignment: pw.Alignment.centerRight,
-            margin: const pw.EdgeInsets.only(top: 12),
-            child: pw.Text(
-              'Sayfa ${context.pageNumber} / ${context.pagesCount}',
-              style: pw.TextStyle(font: fontRegular, fontSize: 8, color: PdfColors.grey500),
-            ),
-          );
-        },
-        build: (pw.Context context) => contentWidgets,
-      ),
-    );
+            );
+          },
+        ),
+      );
+    }
 
-    onProgress?.call(0.95, 'PDF dosyası kaydediliyor...');
+    onProgress?.call(0.95, 'PDF diske kaydediliyor...');
     final workingDir = await TempFileManager.workingDir;
     final baseName = p.basenameWithoutExtension(title);
     final outPath = p.join(
@@ -651,7 +639,172 @@ class UniversalConverterService {
     );
     final outFile = File(outPath);
     await outFile.writeAsBytes(await pdf.save());
-    onProgress?.call(1.0, 'Dönüşüm tamamlandı!');
+    onProgress?.call(1.0, 'Dönüşüm tamamlandı! (%100)');
+
+    return outFile;
+  }
+
+  /// Metin içeriğini hızlı ve bellek korumalı bağımsız A4 sayfaları halinde derleyen PDF motoru
+  static Future<File> _generateStyledPdfFromText({
+    required String title,
+    required String content,
+    bool isCode = false,
+    void Function(double, String)? onProgress,
+  }) async {
+    final pdf = pw.Document();
+
+    onProgress?.call(0.1, 'Tipografi hazırlanıyor...');
+
+    pw.Font fontRegular;
+    pw.Font fontBold;
+
+    if (isCode) {
+      try {
+        fontRegular = await PdfGoogleFonts.robotoMonoRegular().timeout(const Duration(seconds: 2));
+        fontBold = await PdfGoogleFonts.robotoMonoBold().timeout(const Duration(seconds: 2));
+      } catch (_) {
+        fontRegular = pw.Font.courier();
+        fontBold = pw.Font.courierBold();
+      }
+    } else {
+      try {
+        fontRegular = await PdfGoogleFonts.robotoRegular().timeout(const Duration(seconds: 2));
+        fontBold = await PdfGoogleFonts.robotoBold().timeout(const Duration(seconds: 2));
+      } catch (_) {
+        fontRegular = pw.Font.helvetica();
+        fontBold = pw.Font.helveticaBold();
+      }
+    }
+
+    final rawLines = content.split('\n');
+    const int linesPerPage = 42;
+    const int maxPages = 40;
+    const int maxSafeLines = linesPerPage * maxPages;
+
+    final linesToProcess = rawLines.length > maxSafeLines
+        ? rawLines.sublist(0, maxSafeLines)
+        : rawLines;
+    final isTruncated = rawLines.length > maxSafeLines;
+
+    final pageLinesList = <List<String>>[];
+    for (int i = 0; i < linesToProcess.length; i += linesPerPage) {
+      final end = (i + linesPerPage < linesToProcess.length) ? i + linesPerPage : linesToProcess.length;
+      final pageBatch = <String>[];
+      for (int lineIdx = i; lineIdx < end; lineIdx++) {
+        final lineStr = linesToProcess[lineIdx].replaceAll('\r', '');
+        if (isCode) {
+          final lineNum = '${lineIdx + 1}'.padLeft(4, ' ');
+          pageBatch.add('$lineNum | $lineStr');
+        } else {
+          pageBatch.add(lineStr);
+        }
+      }
+      pageLinesList.add(pageBatch);
+    }
+
+    final totalPages = pageLinesList.isEmpty ? 1 : pageLinesList.length;
+
+    for (int pIdx = 0; pIdx < pageLinesList.length; pIdx++) {
+      final pageNum = pIdx + 1;
+      final lines = pageLinesList[pIdx];
+      final isLastPage = pageNum == totalPages;
+
+      onProgress?.call(
+        0.3 + (0.6 * (pageNum / totalPages)),
+        'Sayfa $pageNum / $totalPages hazırlanıyor...',
+      );
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.symmetric(horizontal: 28, vertical: 30),
+          build: (pw.Context context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                pw.Container(
+                  padding: const pw.EdgeInsets.only(bottom: 6),
+                  decoration: const pw.BoxDecoration(
+                    border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5)),
+                  ),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text(
+                        title,
+                        style: pw.TextStyle(font: fontBold, fontSize: 9, color: PdfColors.blueGrey800),
+                      ),
+                      pw.Text(
+                        isCode ? 'File++ Kaynak Kodu' : 'File++ Belge Stüdyosu',
+                        style: pw.TextStyle(font: fontRegular, fontSize: 8, color: PdfColors.grey600),
+                      ),
+                    ],
+                  ),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Expanded(
+                  child: pw.Text(
+                    lines.join('\n'),
+                    style: pw.TextStyle(
+                      font: fontRegular,
+                      fontSize: isCode ? 7.2 : 9.0,
+                      lineSpacing: isCode ? 1.3 : 1.7,
+                      color: PdfColors.grey900,
+                    ),
+                  ),
+                ),
+                if (isLastPage && isTruncated) ...[
+                  pw.SizedBox(height: 4),
+                  pw.Container(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: pw.BoxDecoration(
+                      color: PdfColors.amber50,
+                      borderRadius: pw.BorderRadius.circular(4),
+                      border: pw.Border.all(color: PdfColors.amber300, width: 0.5),
+                    ),
+                    child: pw.Text(
+                      '[Mobil bellek güvenliği için ilk $maxSafeLines satır ($totalPages sayfa) PDF olarak derlenmiştir. Dosyanın tamamına TXT formatına dönüştürerek erişebilirsiniz.]',
+                      style: pw.TextStyle(font: fontRegular, fontSize: 7.5, color: PdfColors.amber900),
+                    ),
+                  ),
+                ],
+                pw.SizedBox(height: 6),
+                pw.Container(
+                  padding: const pw.EdgeInsets.only(top: 4),
+                  decoration: const pw.BoxDecoration(
+                    border: pw.Border(top: pw.BorderSide(color: PdfColors.grey200, width: 0.5)),
+                  ),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text(
+                        'File++',
+                        style: pw.TextStyle(font: fontRegular, fontSize: 7.5, color: PdfColors.grey400),
+                      ),
+                      pw.Text(
+                        'Sayfa $pageNum / $totalPages',
+                        style: pw.TextStyle(font: fontRegular, fontSize: 7.5, color: PdfColors.grey600),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    }
+
+    onProgress?.call(0.95, 'PDF diske kaydediliyor...');
+    final workingDir = await TempFileManager.workingDir;
+    final baseName = p.basenameWithoutExtension(title);
+    final outPath = p.join(
+      workingDir.path,
+      '${baseName}_belge_${DateTime.now().millisecondsSinceEpoch}.pdf',
+    );
+    final outFile = File(outPath);
+    await outFile.writeAsBytes(await pdf.save());
+    onProgress?.call(1.0, 'Dönüşüm tamamlandı! (%100)');
 
     return outFile;
   }
@@ -663,5 +816,146 @@ class UniversalConverterService {
       return name.substring(dot + 1).toLowerCase();
     }
     return '';
+  }
+}
+
+// ===========================================================================
+// İZOLE ARKA PLAN İŞÇİLERİ (ISOLATE WORKERS - BELLEĞİ SERBEST BIRAKIR)
+// ===========================================================================
+
+String _extractPdfWorker(String filePath) {
+  sf_pdf.PdfDocument? document;
+  try {
+    final file = File(filePath);
+    final bytes = file.readAsBytesSync();
+    document = sf_pdf.PdfDocument(inputBytes: bytes);
+    final totalPages = document.pages.count;
+    if (totalPages == 0) return '[PDF belgesinde sayfa bulunamadı]';
+
+    final pagesToExtract = totalPages > 100 ? 100 : totalPages;
+    final textExtractor = sf_pdf.PdfTextExtractor(document);
+    final text = textExtractor.extractText(startPageIndex: 0, endPageIndex: pagesToExtract - 1);
+
+    if (totalPages > 100) {
+      return '$text\n\n... [Performans ve bellek güvenliği adına $totalPages sayfanın ilk 100 sayfası ayıklandı] ...';
+    }
+    return text;
+  } catch (e) {
+    return 'PDF metni okunamadı: $e';
+  } finally {
+    try {
+      document?.dispose();
+    } catch (_) {}
+  }
+}
+
+String _extractDocxWorker(String filePath) {
+  try {
+    final file = File(filePath);
+    final bytes = file.readAsBytesSync();
+    final archive = ZipDecoder().decodeBytes(bytes, verify: false);
+    final docFile = archive.findFile('word/document.xml');
+
+    if (docFile == null) return 'Word belgesi içeriği bulunamadı.';
+
+    final xmlString = utf8.decode(docFile.content as List<int>);
+    final document = XmlDocument.parse(xmlString);
+
+    final buffer = StringBuffer();
+    final paragraphs = document.findAllElements('w:p');
+
+    int pCount = 0;
+    for (final p in paragraphs) {
+      final texts = p.findAllElements('w:t').map((e) => e.innerText).join();
+      if (texts.trim().isNotEmpty) {
+        buffer.writeln(texts);
+        pCount++;
+        if (pCount > 3000) {
+          buffer.writeln('\n... [Büyük Word belgesi: Performans ve bellek güvenliği için ilk 3.000 paragraf ayıklandı] ...');
+          break;
+        }
+      }
+    }
+
+    return buffer.toString().trim();
+  } catch (e) {
+    return 'DOCX metni ayıklanamadı: $e';
+  }
+}
+
+String _extractExcelWorker(String filePath) {
+  try {
+    final file = File(filePath);
+    final bytes = file.readAsBytesSync();
+    final excel = ex.Excel.decodeBytes(bytes);
+    final buffer = StringBuffer();
+
+    int sheetCount = 0;
+    for (final table in excel.tables.keys) {
+      if (sheetCount >= 10) {
+        buffer.writeln('... [İlk 10 çalışma sayfası ayıklandı] ...');
+        break;
+      }
+      sheetCount++;
+
+      final sheet = excel.tables[table]!;
+      buffer.writeln('=== SAYFA: $table ===');
+
+      int rowCount = 0;
+      for (final row in sheet.rows) {
+        final rowString = row
+            .map((cell) => cell?.value?.toString().trim() ?? '')
+            .join(' | ');
+        if (rowString.replaceAll('|', '').trim().isNotEmpty) {
+          buffer.writeln(rowString);
+          rowCount++;
+          if (rowCount > 1500) {
+            buffer.writeln('... [Bu sayfada 1.500\'den fazla satır var. Performans için ilk 1.500 satır alındı] ...');
+            break;
+          }
+        }
+      }
+      buffer.writeln();
+    }
+
+    return buffer.toString().trim();
+  } catch (e) {
+    return 'Excel verisi okunamadı: $e';
+  }
+}
+
+String _extractPptxWorker(String filePath) {
+  try {
+    final file = File(filePath);
+    final bytes = file.readAsBytesSync();
+    final archive = ZipDecoder().decodeBytes(bytes, verify: false);
+    final buffer = StringBuffer();
+
+    int slideIndex = 1;
+    while (slideIndex <= 100) {
+      final slideFile = archive.findFile('ppt/slides/slide$slideIndex.xml');
+      if (slideFile == null) break;
+
+      final xmlString = utf8.decode(slideFile.content as List<int>);
+      final document = XmlDocument.parse(xmlString);
+
+      buffer.writeln('=== SLAYT $slideIndex ===');
+      final texts = document.findAllElements('a:t').map((e) => e.innerText);
+      for (final text in texts) {
+        if (text.trim().isNotEmpty) {
+          buffer.writeln(text);
+        }
+      }
+      buffer.writeln();
+      slideIndex++;
+    }
+
+    if (slideIndex > 100) {
+      buffer.writeln('... [İlk 100 slayt ayıklandı] ...');
+    }
+
+    return buffer.toString().trim();
+  } catch (e) {
+    return 'PowerPoint metinleri okunamadı: $e';
   }
 }

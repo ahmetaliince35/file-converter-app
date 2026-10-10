@@ -47,13 +47,27 @@ class _UniversalConverterScreenState extends State<UniversalConverterScreen> {
   void initState() {
     super.initState();
     if (widget.initialFile != null) {
-      _selectedFile = widget.initialFile;
-      if (p.extension(widget.initialFile!.path).toLowerCase() == '.zip') {
+      final category = UniversalConverterService.detectCategory(widget.initialFile!);
+      if (category == FileFormatCategory.unknown) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _selectedFile != null) {
-            _handleZipFlow(_selectedFile!);
+          if (mounted) {
+            showFeedbackSnackBar(
+              context,
+              message: 'Bu dosya türü Evrensel Dönüştürücü tarafından desteklenmiyor.',
+              icon: Icons.warning_amber_rounded,
+              backgroundColor: Colors.amber.shade900,
+            );
           }
         });
+      } else {
+        _selectedFile = widget.initialFile;
+        if (p.extension(widget.initialFile!.path).toLowerCase() == '.zip') {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _selectedFile != null) {
+              _handleZipFlow(_selectedFile!);
+            }
+          });
+        }
       }
     }
   }
@@ -492,20 +506,91 @@ class _UniversalConverterScreenState extends State<UniversalConverterScreen> {
             ),
 
             if (_isConverting) ...[
-              const SizedBox(height: 14),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: LinearProgressIndicator(
-                  value: _progress > 0 ? _progress : null,
-                  minHeight: 6,
-                  backgroundColor: colorScheme.surfaceContainerHighest,
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: colorScheme.primary.withValues(alpha: 0.35),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: colorScheme.primary.withValues(alpha: 0.06),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _statusMessage,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 11.5, color: colorScheme.outline),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Dönüştürme İlerlemesi',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: colorScheme.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '%${(_progress * 100).toInt()}',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w800,
+                              color: colorScheme.primary,
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: _progress > 0 ? _progress : null,
+                        minHeight: 8,
+                        backgroundColor: colorScheme.surfaceContainerHighest,
+                        valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _statusMessage,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: colorScheme.onSurfaceVariant,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
 
@@ -601,10 +686,24 @@ class _UniversalConverterScreenState extends State<UniversalConverterScreen> {
     );
   }
 
+  static String _formatFileSize(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    } else if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    } else if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    } else {
+      return '$bytes B';
+    }
+  }
+
   Widget _buildSelectedFileCard(ColorScheme colorScheme) {
     final name = p.basename(_selectedFile!.path);
     final ext = p.extension(_selectedFile!.path).replaceAll('.', '').toUpperCase();
-    final sizeKB = (_selectedFile!.existsSync() ? _selectedFile!.lengthSync() / 1024 : 0).toStringAsFixed(1);
+    final fileBytes = _selectedFile!.existsSync() ? _selectedFile!.lengthSync() : 0;
+    final sizeStr = _formatFileSize(fileBytes);
+    final isLarge = fileBytes > 10 * 1024 * 1024;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -639,7 +738,10 @@ class _UniversalConverterScreenState extends State<UniversalConverterScreen> {
                   style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
                 ),
                 const SizedBox(height: 3),
-                Row(
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -656,11 +758,34 @@ class _UniversalConverterScreenState extends State<UniversalConverterScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
                     Text(
-                      '$sizeKB KB',
-                      style: TextStyle(fontSize: 11, color: colorScheme.outline),
+                      sizeStr,
+                      style: TextStyle(fontSize: 11, color: colorScheme.outline, fontWeight: FontWeight.w600),
                     ),
+                    if (isLarge) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF16A34A).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.bolt_rounded, size: 11, color: Color(0xFF16A34A)),
+                            SizedBox(width: 2),
+                            Text(
+                              'Akış Modu',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF16A34A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     if (_isZip) ...[
                       const SizedBox(width: 8),
                       Container(

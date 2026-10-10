@@ -85,36 +85,123 @@ class MainActivity : FlutterActivity() {
 
         if (uris.isEmpty()) return
 
-        val copiedPaths = ArrayList<String>()
-        for (uri in uris) {
-            val localPath = copyUriToCache(uri)
-            if (localPath != null) {
-                copiedPaths.add(localPath)
-            }
-        }
+        // Büyük dosyalarda UI thread donmasını ve ANR çöküşünü önlemek için arka plan iş parçacığında çalıştır
+        Thread {
+            try {
+                // Eski geçici gelen dosyaları temizle (24 saatten eski olanlar)
+                cleanupOldIncomingFiles()
 
-        if (copiedPaths.isNotEmpty()) {
-            val channel = methodChannel
-            if (channel != null) {
-                channel.invokeMethod("onFilesReceived", copiedPaths)
-            } else {
-                pendingFiles.addAll(copiedPaths)
+                val copiedPaths = ArrayList<String>()
+                for (uri in uris) {
+                    if (isBlockedOrUnsupportedUri(uri)) {
+                        android.util.Log.i("FileConverter", "Blocked or unsupported URI ignored: $uri")
+                        continue
+                    }
+                    val localPath = copyUriToCache(uri)
+                    if (localPath != null) {
+                        copiedPaths.add(localPath)
+                    }
+                }
+
+                if (copiedPaths.isNotEmpty()) {
+                    runOnUiThread {
+                        val channel = methodChannel
+                        if (channel != null) {
+                            channel.invokeMethod("onFilesReceived", copiedPaths)
+                        } else {
+                            pendingFiles.addAll(copiedPaths)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("FileConverter", "Error processing incoming intent in background", e)
             }
+        }.start()
+    }
+
+    private fun isBlockedOrUnsupportedUri(uri: Uri): Boolean {
+        try {
+            val mime = contentResolver.getType(uri)?.lowercase() ?: ""
+            if (mime == "application/pdf" || mime.startsWith("video/")) {
+                return true
+            }
+
+            var checkName: String? = null
+            if (uri.scheme == "content") {
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1 && cursor.moveToFirst()) {
+                        checkName = cursor.getString(nameIndex)
+                    }
+                }
+            } else if (uri.scheme == "file") {
+                checkName = uri.lastPathSegment
+            }
+
+            val nameLower = (checkName ?: uri.path ?: "").lowercase()
+            val blockedExts = listOf(".pdf", ".mp4", ".mkv", ".avi", ".mov", ".3gp", ".wmv", ".flv", ".webm", ".apk", ".exe", ".bin")
+            for (ext in blockedExts) {
+                if (nameLower.endsWith(ext)) {
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("FileConverter", "Failed to inspect URI type: $uri", e)
         }
+        return false
+    }
+
+    private fun cleanupOldIncomingFiles() {
+        try {
+            val incomingDir = File(cacheDir, "incoming_files")
+            if (incomingDir.exists() && incomingDir.isDirectory) {
+                val now = System.currentTimeMillis()
+                val oneDayAgo = now - 24 * 60 * 60 * 1000
+                incomingDir.listFiles()?.forEach { file ->
+                    if (file.lastModified() < oneDayAgo) {
+                        file.delete()
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun copyUriToCache(uri: Uri): String? {
         return try {
             var fileName: String? = null
-            if (uri.scheme == "content") {
-                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex != -1 && cursor.moveToFirst()) {
-                        fileName = cursor.getString(nameIndex)
+            var fileSize: Long = -1
+
+            if (uri.scheme == "file") {
+                uri.path?.let { p ->
+                    val f = File(p)
+                    if (f.exists() && f.canRead()) {
+                        return f.absolutePath
                     }
                 }
-            } else if (uri.scheme == "file") {
                 fileName = uri.lastPathSegment
+            } else if (uri.scheme == "content") {
+                try {
+                    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex != -1 && cursor.moveToFirst()) {
+                            fileName = cursor.getString(nameIndex)
+                        }
+                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (sizeIndex != -1 && cursor.moveToFirst()) {
+                            fileSize = cursor.getLong(sizeIndex)
+                        }
+                        val dataIndex = cursor.getColumnIndex("_data")
+                        if (dataIndex != -1 && cursor.moveToFirst()) {
+                            val directPath = cursor.getString(dataIndex)
+                            if (!directPath.isNullOrBlank()) {
+                                val directFile = File(directPath)
+                                if (directFile.exists() && directFile.canRead()) {
+                                    return directFile.absolutePath
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
             }
 
             if (fileName.isNullOrBlank()) {
@@ -132,9 +219,15 @@ class MainActivity : FlutterActivity() {
             }
 
             val destFile = File(incomingDir, safeName)
+
+            // Eğer dosya zaten aynı boyutta cache'te mevcutsa yeniden kopyalamadan anında aç
+            if (destFile.exists() && fileSize > 0 && destFile.length() == fileSize) {
+                return destFile.absolutePath
+            }
+
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(destFile).use { output ->
-                    input.copyTo(output)
+                    input.copyTo(output, bufferSize = 131072)
                 }
             }
 

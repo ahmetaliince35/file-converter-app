@@ -385,7 +385,11 @@ class _ImageToPdfScreenState extends State<ImageToPdfScreen> {
                                           child: Stack(
                                             fit: StackFit.expand,
                                             children: [
-                                              Image.file(imgFile, fit: BoxFit.cover),
+                                              Image.file(
+                                                imgFile,
+                                                fit: BoxFit.cover,
+                                                cacheWidth: 800,
+                                              ),
                                               Positioned(
                                                 top: 10,
                                                 left: 10,
